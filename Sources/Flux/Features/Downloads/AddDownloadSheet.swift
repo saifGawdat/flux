@@ -23,6 +23,7 @@ struct AddDownloadSheet: View {
     @State private var mirrorsChoice: Bool?
     @State private var checksumText = ""
     @State private var speedLimit: Int64?
+    @State private var queue: UUID?
 
     enum InspectionState {
         case idle
@@ -112,7 +113,7 @@ struct AddDownloadSheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button(addTitle) {
-                    model.add(requests)
+                    model.add(requests.map { var request = $0; request.queue = queue; return request })
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -332,6 +333,7 @@ struct AddDownloadSheet: View {
                 ForEach(DownloadPriority.allCases.reversed(), id: \.self) { Text($0.title).tag($0) }
             }
             SpeedLimitPicker(title: "Speed limit", limit: $speedLimit)
+            QueuePicker(selection: $queue)
             Toggle("Start immediately", isOn: $startImmediately)
         }
     }

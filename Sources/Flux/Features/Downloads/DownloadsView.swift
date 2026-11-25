@@ -34,6 +34,8 @@ enum StatusFilter: String, CaseIterable, Identifiable, Hashable {
 enum SidebarItem: Hashable {
     case status(StatusFilter)
     case category(FileCategory)
+    /// nil = the main queue.
+    case queue(UUID?)
     case history
 }
 
@@ -48,6 +50,7 @@ struct DownloadsView: View {
             let shown = switch sidebar ?? .status(.all) {
             case .status(let filter): filter.matches(item.record.status)
             case .category(let category): item.record.category == category
+            case .queue(let id): item.record.queueID == id
             case .history: false
             }
             return shown && (search.isEmpty || item.record.matches(search))
@@ -78,6 +81,33 @@ struct DownloadsView: View {
                     }
                 }
                 Section {
+                    if model.settings.queues.isEmpty {
+                        Button { model.queueEditor = QueueEditorRequest() } label: {
+                            Label("New Queue…", systemImage: "plus.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("A queue holds downloads until you start it, or until its scheduled time")
+                    } else {
+                        Label("Main", systemImage: "tray")
+                            .badge(model.current.lazy.filter { $0.record.queueID == nil && $0.record.status != .completed }.count)
+                            .tag(SidebarItem.queue(nil))
+                        ForEach(model.settings.queues) { queue in
+                            QueueSidebarRow(queue: queue).tag(SidebarItem.queue(queue.id))
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Queues")
+                        Spacer()
+                        if !model.settings.queues.isEmpty {
+                            Button { model.queueEditor = QueueEditorRequest() } label: { Image(systemName: "plus") }
+                                .buttonStyle(.borderless)
+                                .help("New queue")
+                        }
+                    }
+                }
+                Section {
                     Label("History", systemImage: "clock.arrow.circlepath")
                         .badge(model.history.count)
                         .tag(SidebarItem.history)
@@ -90,12 +120,21 @@ struct DownloadsView: View {
                     HistoryView(search: search, selection: $selection)
                 } else {
                     DownloadList(items: visible, selection: $selection, emptyFilter: statusFilter,
-                                 category: category, isSearching: !search.isEmpty)
+                                 category: category, isSearching: !search.isEmpty, inQueue: isQueue)
+                        .safeAreaInset(edge: .top, spacing: 0) {
+                            if case .queue(let id?) = sidebar, let queue = model.queue(id) {
+                                QueueHeaderBar(queue: queue)
+                            }
+                        }
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
         }
         .onChange(of: sidebar) { selection = [] }
+        .onChange(of: model.settings.queues.map(\.id)) { _, ids in
+            // The shown queue was deleted.
+            if case .queue(let id?) = sidebar, !ids.contains(id) { sidebar = .status(.all) }
+        }
         .searchable(text: $search, placement: .toolbar, prompt: "Search downloads")
         .toolbar { toolbar }
         // In full screen macOS hosts the toolbar in its own strip with an opaque backdrop
@@ -107,6 +146,12 @@ struct DownloadsView: View {
         }
         .sheet(item: $model.infoSheet) { request in
             DownloadInfoSheet(request: request)
+        }
+        .sheet(item: $model.importSheet) { request in
+            ImportSheet(request: request)
+        }
+        .sheet(item: $model.queueEditor) { request in
+            QueueEditor(queue: request.queue)
         }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -160,6 +205,11 @@ struct DownloadsView: View {
         return nil
     }
 
+    private var isQueue: Bool {
+        if case .queue = sidebar { return true }
+        return false
+    }
+
     private var subtitle: String {
         let active = model.activeCount
         guard active > 0 else { return "\(model.current.count) downloads" }
@@ -174,6 +224,7 @@ struct DownloadList: View {
     let emptyFilter: StatusFilter
     var category: FileCategory? = nil
     let isSearching: Bool
+    var inQueue = false
     /// Groups the user opened or closed (big groups start closed, small ones open).
     @State private var toggledGroups: Set<UUID> = []
 
@@ -193,7 +244,7 @@ struct DownloadList: View {
 
     private func isCollapsed(_ group: DownloadGroup, count: Int) -> Bool {
         // While filtering or searching, show the matches instead of hiding them.
-        guard emptyFilter == .all, category == nil, !isSearching else { return false }
+        guard emptyFilter == .all, category == nil, !inQueue, !isSearching else { return false }
         return (count > Self.collapseAbove) != toggledGroups.contains(group.id)
     }
 
@@ -268,6 +319,12 @@ struct DownloadList: View {
             ContentUnavailableView.search
         } else if let category {
             ContentUnavailableView("No \(category.title)", systemImage: category.systemImage)
+        } else if inQueue {
+            ContentUnavailableView {
+                Label("Queue Is Empty", systemImage: "tray")
+            } description: {
+                Text("Choose this queue when adding downloads, or right-click downloads › Queue.")
+            }
         } else if emptyFilter == .all {
             ContentUnavailableView {
                 Label("No Downloads Yet", systemImage: "icloud.and.arrow.down")
@@ -326,6 +383,7 @@ struct DownloadContextMenu: View {
             }
             let limits = Set(unfinished.map(\.record.speedLimit))
             SpeedLimitMenu(ids: Set(unfinished.map(\.id)), current: limits.count == 1 ? limits.first : nil)
+            MoveToQueueMenu(ids: Set(unfinished.map(\.id)))
         }
         if targets.contains(where: { $0.record.status == .failed }), targets.count > 1 {
             Button("Retry Failed") { model.resume(Set(targets.filter { $0.record.status == .failed }.map(\.id))) }

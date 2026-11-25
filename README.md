@@ -6,7 +6,7 @@ A native macOS download manager for Apple Silicon, built with Swift 6, SwiftUI a
 
 ## Status
 
-Phases 1 (foundation), 2 (download engine) and 3 (smart management) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
+Phases 1 (foundation), 2 (download engine), 3 (smart management) and 4 (power user) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
 and what is next, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions.
 
 What works today:
@@ -53,6 +53,17 @@ What works today:
   quarantined, never overwriting; entries that climb out of the folder are refused
 - **History**: Clear Completed (⇧⌘K) moves finished downloads to History, grouped by day,
   with search, Download Again and Clear History
+- **Queues**: named queues (sidebar › Queues) hold downloads until you start them, or start
+  and stop on a schedule (days, start time, optional stop time), with their own
+  downloads-at-a-time limit
+- **Import / export**: File › Import Links… (⌘O) reads .txt (one link per line, aria2
+  `out=`/`dir=`/`checksum=` lines), .csv (with or without a header) and .json; File › Export
+  Downloads writes the same formats
+- **Clipboard** (opt-in, Settings › General): copy a link to a file or video and Flux asks,
+  in a small panel, whether to download it
+- **`flux` command line**: `flux add <link> --wait`, `flux list`, `flux pause all`,
+  `flux limit 2M`, `flux queue start Night`, `flux import links.txt`, … (Settings › General ›
+  Install, or `build/Flux.app/Contents/Helpers/flux`)
 - Downloads window with per-connection progress bars, filters, search, drag & drop of
   links, context menus, settings
 
@@ -87,6 +98,20 @@ open build/Flux.app
 
 For development, `swift run Flux` also launches the app (without a bundle identifier).
 
+## Command line
+
+`flux` sends each command to the running app (it opens Flux if needed), so Terminal and the
+window always show the same downloads. Run `flux help` for everything; `--json` on any
+command gives machine-readable output, and `flux add … --wait` exits 0 only when every
+download succeeded.
+
+```sh
+flux add https://example.com/big.iso -o ~/ISOs --wait
+cat links.txt | flux add - -q Night
+flux list
+flux pause all && flux limit 500K
+```
+
 ## Tests
 
 ```sh
@@ -115,12 +140,16 @@ FLUX_SNAPSHOT=/tmp/flux-dark.png FLUX_SNAPSHOT_DARK=1 build/Flux.app/Contents/Ma
 FLUX_SNAPSHOT=/tmp/add.png FLUX_SNAPSHOT_ADD="https://…" build/Flux.app/Contents/MacOS/Flux
 # the Info window of the n-th download (FLUX_SNAPSHOT_EDITLINK=1 opens Change Link):
 FLUX_SNAPSHOT=/tmp/info.png FLUX_SNAPSHOT_INFO=0 build/Flux.app/Contents/MacOS/Flux
-# Settings › Organize, or the History list:
+# Settings › Organize (organize), General (general), History (history), the first queue's
+# editor (queue) or list (queues), the clipboard prompt (clipboard), or the import sheet for
+# FLUX_SNAPSHOT_FILE (import):
 FLUX_SNAPSHOT=/tmp/org.png FLUX_SNAPSHOT_VIEW=organize build/Flux.app/Contents/MacOS/Flux
 ```
 
 ## Data
 
 - Database: `~/Library/Application Support/Flux/flux.sqlite`
+- Command socket: `~/Library/Application Support/Flux/control.sock` (owner-only; override
+  with `FLUX_SOCKET`, which a `FLUX_DATABASE` developer instance needs to accept commands)
 - Logs: `log stream --predicate 'subsystem == "app.flux"'`
 - Partial downloads: `<name>.<id>.fluxpart` next to the destination file

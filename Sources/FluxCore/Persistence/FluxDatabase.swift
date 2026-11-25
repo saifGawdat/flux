@@ -46,9 +46,10 @@ public actor FluxDatabase {
                 kind, media_format, title, thumbnail_url,
                 group_id, group_title, group_kind, group_index, referer,
                 mirrors, speed_limit, checksum, checksum_verified, size_verified,
-                auto_file, filed_by, content_hash, duplicate_of, extracted_path, extraction_error, archived
+                auto_file, filed_by, content_hash, duplicate_of, extracted_path, extraction_error, archived,
+                queue_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      ?, ?, ?, ?, ?, ?, ?)
+                      ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url, file_name = excluded.file_name,
                 user_named_file = excluded.user_named_file, directory = excluded.directory,
@@ -70,7 +71,7 @@ public actor FluxDatabase {
                 auto_file = excluded.auto_file, filed_by = excluded.filed_by,
                 content_hash = excluded.content_hash, duplicate_of = excluded.duplicate_of,
                 extracted_path = excluded.extracted_path, extraction_error = excluded.extraction_error,
-                archived = excluded.archived
+                archived = excluded.archived, queue_id = excluded.queue_id
             """, [
                 .text(record.id.uuidString),
                 .text(record.url.absoluteString),
@@ -112,6 +113,7 @@ public actor FluxDatabase {
                 .text(record.extractedPath?.path),
                 .text(record.extractionError),
                 .bool(record.isArchived),
+                .text(record.queueID?.uuidString),
             ])
     }
 
@@ -212,6 +214,7 @@ public actor FluxDatabase {
         record.extractedPath = row.string("extracted_path").map { URL(fileURLWithPath: $0) }
         record.extractionError = row.string("extraction_error")
         record.isArchived = row.bool("archived")
+        record.queueID = row.string("queue_id").flatMap(UUID.init(uuidString:))
         return record
     }
 }

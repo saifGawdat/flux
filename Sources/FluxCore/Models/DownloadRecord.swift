@@ -131,6 +131,8 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     public var extractionError: String?
     /// Cleared from the Downloads list; still listed in History.
     public var isArchived = false
+    /// The named queue this download waits in; nil = the main queue.
+    public var queueID: UUID?
 
     public init(
         id: UUID = UUID(),

@@ -45,6 +45,8 @@ public actor DownloadManager {
         public var checksum: Checksum?
         /// This download's own speed cap, bytes per second.
         public var speedLimit: Int64?
+        /// Named queue to wait in; nil = the main queue.
+        public var queue: UUID?
 
         public init(
             url: URL,
@@ -62,7 +64,8 @@ public actor DownloadManager {
             groupIndex: Int = 0,
             mirrors: [URL] = [],
             checksum: Checksum? = nil,
-            speedLimit: Int64? = nil
+            speedLimit: Int64? = nil,
+            queue: UUID? = nil
         ) {
             self.url = url
             self.directory = directory
@@ -80,6 +83,7 @@ public actor DownloadManager {
             self.mirrors = mirrors
             self.checksum = checksum
             self.speedLimit = speedLimit
+            self.queue = queue
         }
     }
 
@@ -100,6 +104,13 @@ public actor DownloadManager {
     /// Finished downloads being filed, checked for duplicates or extracted.
     private var finishing: Set<UUID> = []
     private var isStarted = false
+    /// The current time; injectable so tests can drive queue schedules.
+    private let clock: @Sendable () -> Date
+    /// Schedules are checked for starts and stops since this moment.
+    private var lastScheduleCheck: Date
+    private var scheduleTask: Task<Void, Never>?
+    /// How often queue schedules are checked.
+    public static let scheduleCheckInterval: Duration = .seconds(10)
     public private(set) var settings: FluxSettings
 
     /// Loads persisted state and recovers downloads interrupted by quit or crash.
@@ -107,9 +118,12 @@ public actor DownloadManager {
     public init(
         database: FluxDatabase,
         jobOptions: DownloadJob.Options = .init(),
-        mediaTools: MediaTools = .discover()
+        mediaTools: MediaTools = .discover(),
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) async throws {
         self.database = database
+        self.clock = clock
+        self.lastScheduleCheck = clock()
         self.jobOptions = jobOptions
         self.mediaTools = mediaTools
         let settings = try await database.loadSettings()
@@ -161,7 +175,22 @@ public actor DownloadManager {
 
     public func start() async {
         isStarted = true
+        // Flux was closed when a window began: start queues that should be running now.
+        let now = clock()
+        var queues = settings.queues
+        for index in queues.indices where queues[index].schedule?.isInsideWindow(at: now) == true {
+            queues[index].isRunning = true
+        }
+        lastScheduleCheck = now
+        if queues != settings.queues { await saveQueues(queues) }
         await schedule()
+        scheduleTask?.cancel()
+        scheduleTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.scheduleCheckInterval)
+                await self?.checkSchedules()
+            }
+        }
     }
 
     @discardableResult
@@ -199,6 +228,7 @@ public actor DownloadManager {
             record.speedLimit = request.speedLimit.flatMap { $0 > 0 ? $0 : nil }
             // Only Flux's own choice of folder may be changed by rules and categories.
             record.autoFile = request.directory == nil
+            record.queueID = request.queue.flatMap { id in settings.queues.contains { $0.id == id } ? id : nil }
             records.append(record)
         }
         try await database.save(records)
@@ -393,7 +423,14 @@ public actor DownloadManager {
     }
 
     public func updateSettings(_ newValue: FluxSettings) async throws {
-        let normalized = newValue.normalized()
+        var normalized = newValue.normalized()
+        // Running or not is the manager's business (Start/Stop, schedules); edits keep it.
+        for index in normalized.queues.indices {
+            if let old = settings.queues.first(where: { $0.id == normalized.queues[index].id }) {
+                normalized.queues[index].isRunning = old.isRunning
+            }
+        }
+        let removedQueues = Set(settings.queues.map(\.id)).subtracting(normalized.queues.map(\.id))
         try await database.save(normalized)
         let limitChanged = normalized.effectiveSpeedLimit != settings.effectiveSpeedLimit
         settings = normalized
@@ -404,7 +441,106 @@ public actor DownloadManager {
             }
         }
         broadcast(.settingsChanged(normalized))
+        // Downloads of a deleted queue go back to the main queue.
+        for item in items.values where item.record.queueID.map(removedQueues.contains) == true {
+            await update(item.id) { $0.queueID = nil }
+        }
         await schedule()
+    }
+
+    // MARK: - Queues
+
+    /// Starts a named queue: its downloads begin, up to its own and the overall limit.
+    public func startQueue(_ id: UUID) async {
+        await setQueueRunning(id, true)
+    }
+
+    /// Stops a named queue. Its running downloads stop and wait, ready to continue when
+    /// the queue starts again.
+    public func stopQueue(_ id: UUID) async {
+        await setQueueRunning(id, false)
+    }
+
+    /// Moves downloads to a named queue (nil = the main queue). A running download that
+    /// lands in a stopped queue stops and waits there.
+    public func move(_ ids: some Collection<UUID>, toQueue queue: UUID?) async {
+        let target = queue.flatMap { id in settings.queues.contains { $0.id == id } ? id : nil }
+        for id in ids where items[id] != nil && items[id]?.record.queueID != target {
+            await update(id) { $0.queueID = target }
+        }
+        await enforceStoppedQueues()
+        await schedule()
+    }
+
+    /// Applies scheduled starts and stops that fell due since the last check. Runs every
+    /// few seconds while the manager is started.
+    public func checkSchedules() async {
+        let now = clock()
+        defer { lastScheduleCheck = now }
+        guard now > lastScheduleCheck else { return }
+        var queues = settings.queues
+        for index in queues.indices {
+            guard let schedule = queues[index].schedule,
+                  let last = schedule.changes(from: lastScheduleCheck, to: now).last else { continue }
+            queues[index].isRunning = last.change == .start
+            Log.manager.info("Queue \(queues[index].name, privacy: .public) \(last.change == .start ? "started" : "stopped", privacy: .public) by its schedule")
+        }
+        guard queues != settings.queues else { return }
+        await saveQueues(queues)
+        await enforceStoppedQueues()
+        await schedule()
+    }
+
+    public func queue(_ id: UUID?) -> DownloadQueue? {
+        id.flatMap { id in settings.queues.first { $0.id == id } }
+    }
+
+    private func setQueueRunning(_ id: UUID, _ running: Bool) async {
+        guard let index = settings.queues.firstIndex(where: { $0.id == id }),
+              settings.queues[index].isRunning != running else { return }
+        var queues = settings.queues
+        queues[index].isRunning = running
+        await saveQueues(queues)
+        await enforceStoppedQueues()
+        await schedule()
+    }
+
+    private func saveQueues(_ queues: [DownloadQueue]) async {
+        settings.queues = queues
+        do { try await database.save(settings) } catch {
+            Log.persistence.error("Failed to save queues: \(String(describing: error), privacy: .public)")
+        }
+        broadcast(.settingsChanged(settings))
+    }
+
+    /// A download may start when its queue is the main queue or a started named queue.
+    private func queueIsRunning(_ id: UUID?) -> Bool {
+        guard let id else { return true }
+        return queue(id)?.isRunning ?? true
+    }
+
+    /// A queue started by a schedule without a stop time runs until nothing in it is
+    /// waiting or downloading, then stops so later additions wait for the next start.
+    private func stopFinishedScheduledQueues() async {
+        let busy = Set(items.values.compactMap { item in
+            item.record.status == .queued || item.record.status.isActive ? item.record.queueID : nil
+        })
+        var queues = settings.queues
+        for index in queues.indices where queues[index].isRunning && queues[index].schedule != nil
+            && queues[index].schedule?.stop == nil && !busy.contains(queues[index].id) {
+            queues[index].isRunning = false
+            Log.manager.info("Queue \(queues[index].name, privacy: .public) finished; stopped until its next start")
+        }
+        if queues != settings.queues { await saveQueues(queues) }
+    }
+
+    /// Running downloads in stopped queues stop and go back to waiting.
+    private func enforceStoppedQueues() async {
+        let stopped = items.values.filter { $0.record.status.isActive && !queueIsRunning($0.record.queueID) }
+        for item in stopped {
+            if let handle = jobs[item.id] { await apply(await handle.job.pause()) }
+            await update(item.id) { $0.status = .queued }
+        }
     }
 
     /// Re-scans for yt-dlp/ffmpeg (e.g. after the user installs them).
@@ -415,6 +551,8 @@ public actor DownloadManager {
     /// Checkpoints every running download so it resumes at next launch. Call before quitting.
     public func shutdown() async {
         isStarted = false
+        scheduleTask?.cancel()
+        scheduleTask = nil
         for (id, handle) in jobs {
             var record = await handle.job.suspendForShutdown()
             if let current = items[id] { record.priority = current.record.priority }
@@ -430,19 +568,27 @@ public actor DownloadManager {
 
     private func schedule() async {
         guard isStarted else { return }
-        var running = items.values.filter { $0.record.status.isActive }.count
+        let active = items.values.filter { $0.record.status.isActive }
+        var running = active.count
         guard running < settings.maxConcurrentDownloads else { return }
+        var runningPerQueue: [UUID: Int] = [:]
+        for item in active { if let queue = item.record.queueID { runningPerQueue[queue, default: 0] += 1 } }
         let candidates = items.values
-            .filter { $0.record.status == .queued }
+            .filter { $0.record.status == .queued && queueIsRunning($0.record.queueID) }
             .sorted { DownloadRecord.queueOrder($0.record, $1.record) }
         for candidate in candidates where running < settings.maxConcurrentDownloads {
             let id = candidate.id
             guard items[id]?.record.status == .queued else { continue }
+            if let queueID = candidate.record.queueID, let limit = queue(queueID)?.maxConcurrent {
+                guard runningPerQueue[queueID, default: 0] < limit else { continue }
+                runningPerQueue[queueID, default: 0] += 1
+            }
             items[id]?.record.status = .connecting
             if let item = items[id] { broadcast(.updated(item)) }
             running += 1
             await job(for: id)?.start()
         }
+        await stopFinishedScheduledQueues()
     }
 
     private func job(for id: UUID) -> (any TransferJob)? {
@@ -468,8 +614,8 @@ public actor DownloadManager {
         jobs.removeValue(forKey: id)?.continuation.finish()
     }
 
-    /// Merges a job snapshot. The job owns transfer state; the manager owns `priority`
-    /// and `speedLimit`.
+    /// Merges a job snapshot. The job owns transfer state; the manager owns `priority`,
+    /// `speedLimit` and `queueID`.
     private func apply(_ snapshot: TransferSnapshot) async {
         let id = snapshot.record.id
         guard let current = items[id], snapshot.sequence > (lastSequence[id] ?? 0)
@@ -482,6 +628,7 @@ public actor DownloadManager {
         var record = snapshot.record
         record.priority = current.record.priority
         record.speedLimit = current.record.speedLimit
+        record.queueID = current.record.queueID
         let item = Item(
             record: record,
             bytesPerSecond: record.status.isActive ? snapshot.bytesPerSecond : 0,

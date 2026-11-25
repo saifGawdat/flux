@@ -72,7 +72,8 @@ struct DownloadRow: View {
         let host = record.sourceHost
         switch record.status {
         case .queued:
-            return "Queued · \(host)" + (record.receivedBytes > 0 ? " · \(amount)" : "")
+            let state = model.waitingText(for: record.queueID) ?? "Queued"
+            return "\(state) · \(host)" + (record.receivedBytes > 0 ? " · \(amount)" : "")
         case .connecting:
             return item.detail ?? "Connecting to \(host)…"
         case .downloading:

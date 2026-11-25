@@ -7,6 +7,9 @@ let package = Package(
     products: [
         .executable(name: "Flux", targets: ["Flux"]),
         .library(name: "FluxCore", targets: ["FluxCore"]),
+        // Installed as `flux`; a different build name avoids clashing with `Flux` on
+        // case-insensitive disks.
+        .executable(name: "flux-cli", targets: ["FluxCLI"]),
     ],
     targets: [
         .target(
@@ -15,6 +18,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "Flux",
+            dependencies: ["FluxCore"]
+        ),
+        .executableTarget(
+            name: "FluxCLI",
             dependencies: ["FluxCore"]
         ),
         .testTarget(

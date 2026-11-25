@@ -9,11 +9,15 @@ BUILD="${FLUX_BUILD:-1}"
 APP="build/Flux.app"
 
 swift build -c release --arch arm64 --product Flux
-BIN="$(swift build -c release --arch arm64 --show-bin-path)/Flux"
+swift build -c release --arch arm64 --product flux-cli
+BIN_DIR="$(swift build -c release --arch arm64 --show-bin-path)"
+BIN="$BIN_DIR/Flux"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$BIN" "$APP/Contents/MacOS/Flux"
+# The command-line tool; Settings › General links it into the PATH as `flux`.
+cp "$BIN_DIR/flux-cli" "$APP/Contents/Helpers/flux"
 cp Resources/Brand/sky-halftone.jpg "$APP/Contents/Resources/"
 cp Resources/Brand/Flux.icns "$APP/Contents/Resources/"   # regenerate: swift scripts/make-icon.swift
 
@@ -42,5 +46,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+codesign --force --sign - --timestamp=none "$APP/Contents/Helpers/flux"
 codesign --force --sign - --timestamp=none "$APP"
 echo "Built $APP ($(lipo -archs "$APP/Contents/MacOS/Flux"))"

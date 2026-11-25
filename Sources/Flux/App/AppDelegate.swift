@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// On normal quit, checkpoint active downloads before exiting so they resume next launch.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let manager = AppModel.shared.manager else { return .terminateNow }
+        AppModel.shared.stopControlServer()
         Task {
             await manager.shutdown()
             NSApp.reply(toApplicationShouldTerminate: true)
@@ -47,13 +48,35 @@ enum WindowSnapshot {
             return
         }
         if let view = env["FLUX_SNAPSHOT_VIEW"], let path = env["FLUX_SNAPSHOT"] {
-            // "organize": Settings › Organize; "history": the History list.
-            renderOffscreen(to: path, width: view == "history" ? 760 : 540, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 3,
+            // "organize": Settings › Organize; "history": the History list; "queue": the
+            // queue editor (first queue); "import": the import sheet for FLUX_SNAPSHOT_FILE;
+            // "clipboard": the copied-link prompt; "queues": the list of the first queue.
+            let widths = ["history": 760.0, "queues": 760, "queue": 460, "import": 480, "clipboard": 340, "general": 540]
+            renderOffscreen(to: path, width: widths[view] ?? 540, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 3,
                             dark: env["FLUX_SNAPSHOT_DARK"] == "1") {
-                Group {
-                    if view == "history" {
+                let model = AppModel.shared
+                return Group {
+                    switch view {
+                    case "history":
                         HistoryView(search: "", selection: .constant([])).frame(height: 520)
-                    } else {
+                    case "queue":
+                        QueueEditor(queue: model.settings.queues.first)
+                    case "import":
+                        let file = URL(fileURLWithPath: env["FLUX_SNAPSHOT_FILE"] ?? "/dev/null")
+                        ImportSheet(request: ImportRequest(fileName: file.lastPathComponent,
+                                                           entries: (try? LinkList.read(file)) ?? []))
+                    case "clipboard":
+                        ClipboardPrompt(links: [URL(string: "https://example.com/files/Flux-2.0.dmg")!],
+                                        onDownload: {}, onOptions: {}, onClose: {}).padding(0)
+                    case "queues":
+                        let queue = model.settings.queues.first
+                        DownloadList(items: model.current.filter { $0.record.queueID == queue?.id }, selection: .constant([]),
+                                     emptyFilter: .all, isSearching: false, inQueue: true)
+                            .safeAreaInset(edge: .top, spacing: 0) { if let queue { QueueHeaderBar(queue: queue) } }
+                            .frame(height: 360)
+                    case "general":
+                        SettingsView()
+                    default:
                         OrganizeSettings()
                     }
                 }

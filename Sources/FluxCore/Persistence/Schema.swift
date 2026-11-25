@@ -72,6 +72,9 @@ enum Schema {
             ALTER TABLE downloads ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
             CREATE INDEX downloads_content_hash ON downloads(content_hash);
             """),
+        Migration(version: 7, name: "named queues", sql: """
+            ALTER TABLE downloads ADD COLUMN queue_id TEXT;
+            """),
     ]
 
     static var latestVersion: Int { migrations.last?.version ?? 0 }

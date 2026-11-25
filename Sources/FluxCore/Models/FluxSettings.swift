@@ -32,6 +32,10 @@ public struct FluxSettings: Codable, Sendable, Equatable {
     /// After a successful extraction, move the archive itself to the Trash.
     public var trashArchivesAfterExtracting: Bool
     public var duplicateAction: DuplicateAction
+    /// Named queues, in sidebar order. The main queue isn't listed.
+    public var queues: [DownloadQueue]
+    /// Offer to download links the user copies (always asks first).
+    public var watchClipboard: Bool
 
     public enum DuplicateAction: String, Codable, Sendable, CaseIterable {
         /// Keep the new copy and mark it as a duplicate.
@@ -57,7 +61,9 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         rules: [DownloadRule] = [],
         extractArchives: Bool = false,
         trashArchivesAfterExtracting: Bool = false,
-        duplicateAction: DuplicateAction = .keepBoth
+        duplicateAction: DuplicateAction = .keepBoth,
+        queues: [DownloadQueue] = [],
+        watchClipboard: Bool = false
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConcurrentDownloads = maxConcurrentDownloads
@@ -71,6 +77,8 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         self.extractArchives = extractArchives
         self.trashArchivesAfterExtracting = trashArchivesAfterExtracting
         self.duplicateAction = duplicateAction
+        self.queues = queues
+        self.watchClipboard = watchClipboard
     }
 
     /// Tolerates missing keys so older stored settings keep working after upgrades.
@@ -89,6 +97,8 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         extractArchives = try c.decodeIfPresent(Bool.self, forKey: .extractArchives) ?? defaults.extractArchives
         trashArchivesAfterExtracting = try c.decodeIfPresent(Bool.self, forKey: .trashArchivesAfterExtracting) ?? defaults.trashArchivesAfterExtracting
         duplicateAction = (try? c.decodeIfPresent(DuplicateAction.self, forKey: .duplicateAction)) ?? defaults.duplicateAction
+        queues = (try? c.decodeIfPresent([DownloadQueue].self, forKey: .queues)) ?? defaults.queues
+        watchClipboard = try c.decodeIfPresent(Bool.self, forKey: .watchClipboard) ?? defaults.watchClipboard
     }
 
     /// Clamps values into supported ranges.
@@ -97,6 +107,14 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         s.maxConcurrentDownloads = min(max(s.maxConcurrentDownloads, Self.concurrentRange.lowerBound), Self.concurrentRange.upperBound)
         s.connectionsPerDownload = min(max(s.connectionsPerDownload, 1), 32)
         s.speedLimit = max(s.speedLimit, Self.minimumSpeedLimit)
+        var seen = Set<UUID>()
+        s.queues = s.queues.filter { seen.insert($0.id).inserted }.map { queue in
+            var queue = queue
+            queue.name = queue.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if queue.name.isEmpty { queue.name = "Queue" }
+            queue.maxConcurrent = queue.maxConcurrent.map { max(1, $0) }
+            return queue
+        }
         return s
     }
 }

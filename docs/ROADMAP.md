@@ -84,11 +84,32 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
 - Not yet: watching folders for files added outside Flux, renaming rules, per-rule
   actions beyond the folder.
 
-## Phase 4 — Power user ⬜
-TXT/CSV/JSON import & export, multiple named queues with schedules, clipboard
-monitoring (opt-in, always asks), `flux` CLI talking to the app over a protected
-Unix domain socket in the user's Application Support folder (0600 permissions,
-peer UID check), sharing the app's `DownloadManager`.
+## Phase 4 — Power user ✅
+
+- Named queues ✅: sidebar › Queues (Main plus your own), Start/Stop by hand, per-queue
+  downloads-at-a-time, move downloads between queues (right-click › Queue), queue choice in
+  the add and import sheets. Stopping a queue pauses its running downloads back to waiting.
+- Schedules ✅: days of the week, start time, optional stop time (overnight windows work).
+  Checked every 10 s; launching inside a window starts the queue; without a stop time the
+  queue stops itself once nothing in it is waiting.
+- Import ✅: .txt (links anywhere in a line, `#` comments, aria2 `out=`/`dir=`/`checksum=`/
+  `referer=` option lines, tab-separated mirrors), .csv (header names like url/link, name,
+  folder, checksum, mirrors; `,` `;` or tab; quoted fields; or no header), .json (Flux's
+  export, an array of links or objects). Content beats extension; 20 MB / 10,000 links max.
+- Export ✅: text, CSV (spreadsheet-safe: formula-looking cells are quoted) and JSON with
+  status, size, checksum/SHA-256, dates; optionally including History.
+- Clipboard ✅ (opt-in): links to files (by extension) and video pages only; concealed /
+  transient pasteboard types (password managers) and Flux's own copies are skipped; each link
+  is offered once; floating panel with Download / Options… that hides after 15 s.
+- `flux` CLI ✅: add (folder, name, queue, paused, `--wait`, stdin), import, export, list,
+  status, pause/resume/cancel/remove (ID prefixes or `all`), limit, queues, queue start/stop,
+  ping, `--json`. Opens Flux when it isn't running. Bundled at `Contents/Helpers/flux`;
+  Settings › General links it into `/opt/homebrew/bin` or `/usr/local/bin`.
+- Control socket ✅: Unix domain socket in Application Support, 0600, `getpeereid` UID check
+  on every connection, newline-delimited JSON with a protocol version, 4 MB message cap, stale
+  sockets replaced, a live one never taken over.
+- Not yet: scheduled speed limits, "when the queue finishes" actions (sleep/quit),
+  per-queue speed limits.
 
 ## Phase 5 — macOS integration ⬜
 Menu bar extra, notifications, dock progress, Quick Look, Spotlight (Core Spotlight

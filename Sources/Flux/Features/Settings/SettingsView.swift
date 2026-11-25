@@ -17,6 +17,16 @@ struct SettingsView: View {
                         get: { model.settings.resumeOnLaunch },
                         set: { value in model.updateSettings { $0.resumeOnLaunch = value } }
                     ))
+                    Toggle(isOn: Binding(
+                        get: { model.settings.watchClipboard },
+                        set: { value in model.updateSettings { $0.watchClipboard = value } }
+                    )) {
+                        Text("Offer to download links I copy")
+                        Text("Flux asks first, in a small panel. Only links to files and videos count; passwords copied from password managers are never read.")
+                    }
+                }
+                Section("Command Line") {
+                    CommandLineToolRow()
                 }
                 Section("Connections") {
                     Stepper(

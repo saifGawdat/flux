@@ -40,6 +40,19 @@ struct AddSheetRequest: Identifiable {
     var text: String
 }
 
+/// Links read from a file, waiting for the user to confirm the import.
+struct ImportRequest: Identifiable {
+    let id = UUID()
+    var fileName: String
+    var entries: [LinkListEntry]
+}
+
+/// Creates (queue nil) or edits a named queue.
+struct QueueEditorRequest: Identifiable {
+    let id = UUID()
+    var queue: DownloadQueue?
+}
+
 /// Opens the Info sheet for one download, optionally straight into changing its link.
 struct InfoSheetRequest: Identifiable {
     let id = UUID()
@@ -66,11 +79,19 @@ final class AppModel {
     private(set) var toolVersions: [String: String] = [:]
     var addSheet: AddSheetRequest?
     var infoSheet: InfoSheetRequest?
+    var importSheet: ImportRequest?
+    var queueEditor: QueueEditorRequest?
+    /// Where the `flux` command line connects; nil when not accepting commands.
+    private(set) var controlSocket: URL?
     var errorMessage: String?
 
     @ObservationIgnored private(set) var manager: DownloadManager?
     @ObservationIgnored private var index: [UUID: DownloadItemModel] = [:]
     @ObservationIgnored private var didLaunch = false
+    @ObservationIgnored private var controlServer: ControlServer?
+    /// Opens (or brings back) the main window; set by the window's views.
+    @ObservationIgnored var openMainWindow: (() -> Void)?
+    @ObservationIgnored private(set) lazy var clipboard = ClipboardWatcher(model: self)
 
     private init() {}
 
@@ -91,6 +112,8 @@ final class AppModel {
             }
             await manager.start()
             phase = .ready
+            startControlServer(manager, separateDatabase: override != nil)
+            clipboard.update(enabled: settings.watchClipboard)
             await loadMediaTools(from: manager)
         } catch {
             phase = .failed(error.localizedDescription)
@@ -118,8 +141,33 @@ final class AppModel {
             downloads.removeAll { set.contains($0.id) }
         case .settingsChanged(let settings):
             self.settings = settings
+            clipboard.update(enabled: settings.watchClipboard)
         }
         updateDockBadge()
+    }
+
+    // MARK: Command line
+
+    /// Lets the `flux` tool drive this app. A developer instance on another database only
+    /// listens when given its own socket (`FLUX_SOCKET`), so it never takes the real one.
+    private func startControlServer(_ manager: DownloadManager, separateDatabase: Bool) {
+        if separateDatabase, ProcessInfo.processInfo.environment["FLUX_SOCKET"] == nil { return }
+        let server = ControlServer()
+        let handler = ControlHandler(manager: manager)
+        do {
+            try server.start { await handler.handle($0) }
+            controlServer = server
+            controlSocket = server.socketURL
+        } catch {
+            // Flux works without it; only the command line is unavailable.
+            NSLog("Flux: command line unavailable: \(error.localizedDescription)")
+        }
+    }
+
+    func stopControlServer() {
+        controlServer?.stop()
+        controlServer = nil
+        controlSocket = nil
     }
 
     // MARK: Derived state
@@ -185,6 +233,74 @@ final class AppModel {
     /// Downloads that belong to one playlist or gallery, in playlist order.
     func members(of group: UUID) -> [DownloadItemModel] {
         downloads.filter { $0.record.group?.id == group && !$0.record.isArchived }
+    }
+
+    // MARK: Queues
+
+    func queue(_ id: UUID?) -> DownloadQueue? {
+        id.flatMap { id in settings.queues.first { $0.id == id } }
+    }
+
+    func startQueue(_ id: UUID) { perform { await $0.startQueue(id) } }
+    func stopQueue(_ id: UUID) { perform { await $0.stopQueue(id) } }
+    func move(_ ids: Set<UUID>, toQueue queue: UUID?) { perform { await $0.move(ids, toQueue: queue) } }
+
+    /// Adds or replaces a queue (matched by ID).
+    func saveQueue(_ queue: DownloadQueue) {
+        updateSettings { settings in
+            if let index = settings.queues.firstIndex(where: { $0.id == queue.id }) {
+                settings.queues[index] = queue
+            } else {
+                settings.queues.append(queue)
+            }
+        }
+    }
+
+    /// Deletes a queue; its downloads move to the main queue.
+    func deleteQueue(_ id: UUID) {
+        updateSettings { $0.queues.removeAll { $0.id == id } }
+    }
+
+    /// "Waiting for “Night” · starts tomorrow at 02:00".
+    func waitingText(for queueID: UUID?) -> String? {
+        guard let queue = queue(queueID) else { return nil }
+        if queue.isRunning { return "Queued in “\(queue.name)”" }
+        var text = "Waiting for “\(queue.name)”"
+        if let next = queue.schedule?.next(after: Date()), next.change == .start {
+            text += " · starts \(Format.when(next.date))"
+        }
+        return text
+    }
+
+    // MARK: Import & export
+
+    /// Reads a list of links and shows the import sheet.
+    func importLinks(from url: URL) {
+        do {
+            let entries = try LinkList.read(url)
+            importSheet = ImportRequest(fileName: url.lastPathComponent, entries: entries)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func importLinks(_ entries: [LinkListEntry], queue: UUID?, startImmediately: Bool) {
+        add(entries.map { entry in
+            DownloadManager.NewDownload(
+                url: entry.url, directory: entry.directory, fileName: entry.fileName,
+                startImmediately: startImmediately, referer: entry.referer,
+                mirrors: entry.mirrors, checksum: entry.checksum, queue: queue)
+        })
+    }
+
+    /// Writes the Downloads list (and History, if asked) to a file.
+    func export(to url: URL, format: LinkListFormat, includeHistory: Bool) {
+        let records = downloads.filter { includeHistory || !$0.record.isArchived }.map(\.record)
+        do {
+            try LinkList.export(records, format: format).write(to: url, options: .atomic)
+        } catch {
+            errorMessage = "Couldn’t save \(url.lastPathComponent): \(error.localizedDescription)"
+        }
     }
 
     func archive(_ ids: Set<UUID>) { perform { await $0.archive(ids) } }
@@ -334,5 +450,6 @@ final class AppModel {
         let links = downloads.filter { ids.contains($0.id) }.map(\.record.url.absoluteString)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(links.joined(separator: "\n"), forType: .string)
+        clipboard.ignoreCurrentContents()
     }
 }

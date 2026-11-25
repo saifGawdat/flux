@@ -159,3 +159,22 @@ Filing, duplicate checks and extraction run in `DownloadManager.finishUp` once a
 - `finishing` is marked synchronously in `apply` before any `await`, so no observer sees a
   finished download that hasn't started its post-processing.
 - History is the same table: `archived` rows are hidden from the list, not deleted.
+
+### D13 — Queues are scheduling filters; the CLI is a thin client of the app's manager
+- A named queue is a filter in `DownloadManager.schedule()`: a queued download starts only
+  when its queue is Main or started, and its queue is under its own limit as well as the
+  overall one. No second scheduler exists.
+- Queues live in settings, but `isRunning` belongs to the manager: `updateSettings` keeps the
+  manager's value, so a window holding stale settings can't restart a queue the schedule
+  just stopped. Deleting a queue moves its downloads to Main.
+- Schedules are applied as events: every check looks for starts and stops between the last
+  check and now (`QueueSchedule.changes(from:to:)`), so a sleeping Mac or a slow tick never
+  skips one. The clock is injected for tests.
+- The `flux` tool never opens the database. It sends JSON lines over a Unix domain socket to
+  the running app, whose `ControlHandler` calls the same `DownloadManager` intents as the
+  window: one owner of state, no locking between processes. The socket is 0600 and each
+  connection's peer UID must match ours; a developer instance on another database only
+  listens when given its own `FLUX_SOCKET`.
+- The connection threads are plain GCD threads that block on the socket and wait for the
+  async handler with a semaphore; Swift's cooperative pool is never blocked.
+
