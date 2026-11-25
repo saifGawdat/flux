@@ -62,7 +62,8 @@ public enum MediaFormat: String, Codable, Sendable, CaseIterable, Identifiable {
 
     private static func mp4(maxHeight h: Int, hasFFmpeg: Bool) -> [String] {
         if hasFFmpeg {
-            return ["-f", "bv*[height<=\(h)][ext=mp4]+ba[ext=m4a]/b[height<=\(h)][ext=mp4]/bv*[height<=\(h)]+ba/b[height<=\(h)]/b",
+            // H.264 first: plays everywhere (QuickTime, iPhone) and sites list exact sizes for it.
+            return ["-f", "bv*[height<=\(h)][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=\(h)][ext=mp4]+ba[ext=m4a]/b[height<=\(h)][ext=mp4]/bv*[height<=\(h)]+ba/b[height<=\(h)]/b",
                     "--merge-output-format", "mp4"]
         }
         return ["-f", "b[height<=\(h)][ext=mp4]/b[height<=\(h)]/b"]

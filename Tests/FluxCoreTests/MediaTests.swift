@@ -20,14 +20,18 @@ func makeFakeYTDLP() throws -> URL {
         if key == "fail":
             print("ERROR: [youtube] abc123: Private video. Sign in if you've been granted access", file=sys.stderr)
             sys.exit(1)
-        print('{"title": "Fake Video: Part 1", "duration": 120, "formats": []}')
+        print('{"title": "Fake Video: Part 1", "duration": 120, "formats": ['
+              '{"format_id": "v2160", "protocol": "m3u8_native", "tbr": 8000},'
+              '{"format_id": "v1080", "protocol": "https", "filesize": 30000000, "filesize_approx": 29000000},'
+              '{"format_id": "v360", "protocol": "https", "filesize_approx": 9000000},'
+              '{"format_id": "a", "protocol": "https", "filesize": 3000000}]}')
         sys.exit(0)
     if "--load-info-json" in args:
         sel = args[args.index("-f") + 1]
-        if "height<=1080" in sel: print("1920x1080|mp4|NA|30000000|1080")
-        elif "height<=720" in sel: print("640x360|mp4|9000000|NA|360")
-        elif sel.startswith("ba"): print("audio only|webm|3000000|NA|NA")
-        else: print("3840x2160|webm|NA|90000000.0|2160")
+        if "height<=1080" in sel: print("v1080+a|1920x1080|mp4|1080")
+        elif "height<=720" in sel: print("v360+a|640x360|mp4|360")
+        elif sel.startswith("ba"): print("a|audio only|webm|NA")
+        else: print("v2160+a|3840x2160|webm|2160")
         sys.exit(0)
     workdir = args[args.index("-P") + 1]
     print("FLUXTITLE|Fake Video: Part 1", flush=True)
@@ -148,13 +152,15 @@ struct MediaProbeTests {
         #expect(preview.title == "Fake Video: Part 1")
         #expect(preview.duration == 120)
         #expect(Set(preview.options.keys) == Set(MediaFormat.allCases))
-        #expect(preview.options[.best] == .init(height: 2160, fileExtension: "webm", bytes: 90_000_000, isEstimate: true))
-        #expect(preview.options[.mp4_1080] == .init(height: 1080, fileExtension: "mp4", bytes: 30_000_000, isEstimate: true))
-        #expect(preview.options[.mp4_720] == .init(height: 360, fileExtension: "mp4", bytes: 9_000_000, isEstimate: false))
+        // Streamed 4K: 8000 kbit/s peak × 120 s × 0.6 average, plus 3 MB exact audio.
+        #expect(preview.options[.best] == .init(height: 2160, fileExtension: "webm", bytes: 75_000_000, isEstimate: true))
+        #expect(preview.options[.mp4_1080] == .init(height: 1080, fileExtension: "mp4", bytes: 33_000_000, isEstimate: false),
+                "exact sizes add up exactly")
+        #expect(preview.options[.mp4_720] == .init(height: 360, fileExtension: "mp4", bytes: 12_000_000, isEstimate: true))
+        #expect(preview.options[.m4a] == .init(height: nil, fileExtension: "m4a", bytes: 3_000_000, isEstimate: false))
         let mp3 = try #require(preview.options[.mp3])
         #expect(mp3.fileExtension == "mp3" && mp3.isEstimate && mp3.height == nil)
-        #expect(mp3.bytes == Int64(3_675_000), "estimated from duration, not the source size")
-        #expect(preview.options[.m4a]?.fileExtension == "m4a")
+        #expect(mp3.bytes == Int64(3_450_000), "estimated from duration, not the source size")
     }
 
     @Test func previewErrorsAreFriendly() async throws {
@@ -176,11 +182,22 @@ struct MediaProbeTests {
     }
 
     @Test func parsesOptionLines() {
-        let audio = MediaProbe.parseOption("audio only|webm|3000000|NA|2160", format: .m4a, hasFFmpeg: false, duration: 60)
+        let page = MediaProbe.PageInfo(title: "t", duration: 60, formats: [
+            "a": .init(filesize: 3_000_000, filesizeApprox: nil, tbr: nil, isStreamed: false),
+            "v": .init(filesize: nil, filesizeApprox: nil, tbr: nil, isStreamed: false),
+        ])
+        let audio = MediaProbe.parseOption("a|audio only|webm|2160", format: .m4a, hasFFmpeg: false, page: page)
         #expect(audio == .init(height: nil, fileExtension: "webm", bytes: 3_000_000, isEstimate: false),
                 "audio-only ignores stray height; no conversion without ffmpeg")
-        #expect(MediaProbe.parseOption("1280x720|mp4|NA|NA|720", format: .mp4_720, hasFFmpeg: true, duration: nil)?.bytes == nil)
-        #expect(MediaProbe.parseOption("garbage", format: .best, hasFFmpeg: true, duration: nil) == nil)
+        #expect(MediaProbe.parseOption("v+a|1280x720|mp4|720", format: .mp4_720, hasFFmpeg: true, page: page)?.bytes == nil,
+                "unknown size stays unknown instead of showing only the audio part")
+        #expect(MediaProbe.parseOption("zzz|1280x720|mp4|720", format: .mp4_720, hasFFmpeg: true, page: page)?.bytes == nil)
+        #expect(MediaProbe.parseOption("garbage", format: .best, hasFFmpeg: true, page: page) == nil)
+    }
+
+    @Test func mp4PresetsPreferH264() {
+        let selector = MediaFormat.mp4_1080.ytdlpArguments(hasFFmpeg: true)[1]
+        #expect(selector.hasPrefix("bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/"))
     }
 }
 
@@ -393,6 +410,7 @@ struct LiveMediaTests {
             #expect((option.bytes ?? 0) > 10_000, "\(format) has a size")
         }
         #expect(preview.options[.mp3]?.fileExtension == "mp3")
+        #expect(preview.options[.mp4_720]?.isEstimate == false, "H.264 streams have exact sizes")
     }
 
     @Test func realUnsupportedPageFailsClearly() async throws {
