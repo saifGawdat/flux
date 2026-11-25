@@ -24,7 +24,7 @@ struct OrganizeSettings: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(Array(settings.rules.enumerated()), id: \.element.id) { index, rule in
-                        RuleRow(rule: rule, isFirst: index == 0, isLast: index == settings.rules.count - 1,
+                        RuleRow(rule: rule, commands: settings.commands, isFirst: index == 0, isLast: index == settings.rules.count - 1,
                                 onToggle: { on in updateRule(rule.id) { $0.isEnabled = on } },
                                 onEdit: { editing = RuleDraft(rule) },
                                 onMove: { moveRule(rule.id, by: $0) },
@@ -38,7 +38,7 @@ struct OrganizeSettings: View {
             } header: {
                 Text("Rules")
             } footer: {
-                Text("Checked from top to bottom when a download finishes; the first rule that matches decides the folder. Rules come before folders by kind. Downloads saved to a folder you picked yourself are left alone.")
+                Text("Checked from top to bottom when a download finishes; the first rule that matches decides the folder and what happens next. Rules come before folders by kind. Downloads saved to a folder you picked yourself stay there, but rules’ other actions still apply.")
                     .foregroundStyle(.secondary)
             }
 
@@ -110,6 +110,7 @@ struct OrganizeSettings: View {
 
 private struct RuleRow: View {
     let rule: DownloadRule
+    let commands: [AutomationCommand]
     let isFirst: Bool
     let isLast: Bool
     let onToggle: (Bool) -> Void
@@ -124,7 +125,7 @@ private struct RuleRow: View {
                 .toggleStyle(.checkbox)
             VStack(alignment: .leading, spacing: 2) {
                 Text(rule.name.isEmpty ? "Untitled rule" : rule.name).fontWeight(.medium)
-                Text(RuleText.summary(rule))
+                Text(RuleText.summary(rule, commands: commands))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -146,9 +147,11 @@ private struct RuleRow: View {
 
 /// Plain-language descriptions of rules and conditions.
 enum RuleText {
-    static func summary(_ rule: DownloadRule) -> String {
+    static func summary(_ rule: DownloadRule, commands: [AutomationCommand] = []) -> String {
         let when = rule.conditions.isEmpty ? "No conditions yet" : rule.conditions.map(describe).joined(separator: " and ")
-        return "\(when) → \(rule.folder.lastPathComponent)"
+        var then = rule.actions.summary { id in commands.first { $0.id == id }?.name }
+        if rule.movesFile { then.insert(rule.folder.lastPathComponent, at: 0) }
+        return then.isEmpty ? "\(when) → leave as is" : "\(when) → \(then.joined(separator: ", "))"
     }
 
     static func describe(_ condition: DownloadRule.Condition) -> String {
@@ -204,9 +207,7 @@ private struct RuleEditor: View {
                 } header: {
                     Text("When a finished download matches all of these")
                 }
-                Section("Save it to") {
-                    FolderPickerButton(url: draft.rule.folder) { draft.rule.folder = $0 }
-                }
+                RuleActionsEditor(rule: $draft.rule)
             }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
@@ -242,6 +243,70 @@ private struct RuleEditor: View {
         case .largerThan(let n), .smallerThan(let n): n > 0
         case .category: true
         }
+    }
+}
+
+/// What a rule does: move, rename, extract, checksum, command, notify, reveal, open.
+private struct RuleActionsEditor: View {
+    @Environment(AppModel.self) private var model
+    @Binding var rule: DownloadRule
+
+    private var renaming: Binding<Bool> {
+        Binding(get: { rule.actions.rename != nil },
+                set: { rule.actions.rename = $0 ? (rule.actions.rename ?? "{date} {name}") : nil })
+    }
+
+    var body: some View {
+        Section {
+            Toggle("Move it to", isOn: $rule.movesFile)
+            if rule.movesFile {
+                FolderPickerButton(url: rule.folder) { rule.folder = $0 }
+            }
+            Toggle("Rename it", isOn: renaming)
+            if let pattern = rule.actions.rename {
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Pattern", text: Binding(get: { pattern }, set: { rule.actions.rename = $0 }),
+                              prompt: Text("{date} {name}"))
+                        .font(.body.monospaced())
+                    Text(RenamePreview.text(for: pattern))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Toggle("Extract it, if it’s an archive", isOn: $rule.actions.extract)
+            Toggle("Calculate its SHA-256", isOn: $rule.actions.computeChecksum)
+            Picker("Run command", selection: $rule.actions.command) {
+                Text("None").tag(UUID?.none)
+                ForEach(model.settings.commands) { command in
+                    Text(command.isApproved ? command.name : "\(command.name) (not approved)")
+                        .tag(UUID?.some(command.id))
+                }
+            }
+            if model.settings.commands.isEmpty {
+                Text("Write commands in Settings › Automation.").font(.caption).foregroundStyle(.secondary)
+            }
+            Toggle("Notify me", isOn: $rule.actions.notify)
+            Toggle("Show it in Finder", isOn: $rule.actions.reveal)
+            Toggle("Open it", isOn: $rule.actions.open)
+        } header: {
+            Text("Then")
+        } footer: {
+            Text("Moving applies only to downloads saved to your download folder; the other actions apply to every match.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// "Statement.pdf → 2026-11-26 Statement.pdf", and the tokens a pattern can use.
+enum RenamePreview {
+    static func text(for pattern: String) -> String {
+        var sample = DownloadRecord(url: URL(string: "https://bank.example.com/statement.pdf")!,
+                                    directory: FluxSettings.defaultDownloadDirectory, fileName: "Statement.pdf")
+        sample.status = .completed
+        let result = NamePattern.apply(pattern, to: "Statement.pdf", record: sample) ?? "Statement.pdf"
+        let tokens = NamePattern.tokens.map { "{\($0)}" }.joined(separator: " ")
+        return "Statement.pdf → \(result)\n\(tokens)"
     }
 }
 
@@ -331,4 +396,13 @@ private struct SizeField: View {
 
 private extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
+
+/// Developer aid (`FLUX_SNAPSHOT_VIEW=rule`): the editor of the first rule.
+struct RuleSnapshot: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        RuleEditor(draft: RuleDraft(model.settings.rules.first, defaultFolder: model.settings.downloadDirectory)) { _ in }
+    }
 }

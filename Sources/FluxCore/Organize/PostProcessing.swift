@@ -3,11 +3,12 @@ import Foundation
 
 /// Moves a finished file into another folder without ever overwriting anything.
 public enum FileMover {
-    public static func move(_ file: URL, into folder: URL) async throws -> URL {
+    /// Moves `file` into `folder`, optionally under a new `name`; returns where it landed.
+    public static func move(_ file: URL, into folder: URL, name: String? = nil) async throws -> URL {
         try await Task.detached(priority: .utility) {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             for _ in 0..<5 {
-                let target = FileNaming.uniqueURL(for: file.lastPathComponent, in: folder)
+                let target = FileNaming.uniqueURL(for: name ?? file.lastPathComponent, in: folder)
                 if renamex_np(file.path, target.path, UInt32(RENAME_EXCL)) == 0 { return target }
                 switch errno {
                 case EEXIST: continue // someone took the name meanwhile

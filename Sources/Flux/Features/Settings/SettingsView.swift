@@ -91,6 +91,9 @@ struct SettingsView: View {
             OrganizeSettings()
                 .tabItem { Label("Organize", systemImage: "folder.badge.gearshape") }
 
+            AutomationSettings()
+                .tabItem { Label("Automation", systemImage: "gearshape.2") }
+
             SystemSettings()
                 .tabItem { Label("System", systemImage: "macwindow.badge.plus") }
         }

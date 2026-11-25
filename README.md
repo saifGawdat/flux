@@ -6,8 +6,8 @@ A native macOS download manager for Apple Silicon, built with Swift 6, SwiftUI a
 
 ## Status
 
-Phases 1 (foundation), 2 (download engine), 3 (smart management), 4 (power user) and 5 (macOS
-integration) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
+Phases 1 (foundation), 2 (download engine), 3 (smart management), 4 (power user), 5 (macOS
+integration) and 6 (analytics & automation) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
 and what is next, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions.
 
 What works today:
@@ -74,6 +74,13 @@ What works today:
   download in Flux
 - **Open at login** and **global shortcuts** (⌃⌥⌘D adds a download from the copied link from
   any app; Show/Hide Flux and Pause/Resume All can be assigned), Settings › System
+- **Statistics** (sidebar): downloaded per hour or day for 24 hours / 7 / 30 days, finished
+  and failed, fastest minute, top sites, finished by kind; also `flux stats`
+- **Rule actions** (Settings › Organize): besides moving, a rule can rename (`{date} {name}`,
+  `{site}`, `{playlist}`, …), extract, calculate SHA-256, run a command, notify, show in
+  Finder or open
+- **Commands** (Settings › Automation): zsh scripts rules run with the file as `$1`; each runs
+  only exactly as you approved it, for at most 5 minutes
 - Downloads window with per-connection progress bars, filters, search, drag & drop of
   links, context menus, settings
 
@@ -120,6 +127,7 @@ flux add https://example.com/big.iso -o ~/ISOs --wait
 cat links.txt | flux add - -q Night
 flux list
 flux pause all && flux limit 500K
+flux stats month
 ```
 
 ## Tests
@@ -150,7 +158,8 @@ FLUX_SNAPSHOT=/tmp/flux-dark.png FLUX_SNAPSHOT_DARK=1 build/Flux.app/Contents/Ma
 FLUX_SNAPSHOT=/tmp/add.png FLUX_SNAPSHOT_ADD="https://…" build/Flux.app/Contents/MacOS/Flux
 # the Info window of the n-th download (FLUX_SNAPSHOT_EDITLINK=1 opens Change Link):
 FLUX_SNAPSHOT=/tmp/info.png FLUX_SNAPSHOT_INFO=0 build/Flux.app/Contents/MacOS/Flux
-# Settings › Organize (organize), General (general), System (system), the menu bar window
+# Settings › Organize (organize), General (general), System (system), Automation
+# (automation), the first rule's editor (rule), Statistics (statistics), the menu bar window
 # (menubar), History (history), the first queue's
 # editor (queue) or list (queues), the clipboard prompt (clipboard), or the import sheet for
 # FLUX_SNAPSHOT_FILE (import):
@@ -162,6 +171,7 @@ FLUX_SNAPSHOT=/tmp/org.png FLUX_SNAPSHOT_VIEW=organize build/Flux.app/Contents/M
 - Database: `~/Library/Application Support/Flux/flux.sqlite`
 - Command socket: `~/Library/Application Support/Flux/control.sock` (owner-only; override
   with `FLUX_SOCKET`, which a `FLUX_DATABASE` developer instance needs to accept commands)
+- Traffic: bytes per minute and site in the `traffic` table of the database, kept 90 days
 - Spotlight: finished downloads are listed under the domain `app.flux.downloads` (turn off in
   Settings › System to remove them)
 - Logs: `log stream --predicate 'subsystem == "app.flux"'`

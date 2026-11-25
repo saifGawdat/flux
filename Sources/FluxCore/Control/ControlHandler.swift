@@ -94,6 +94,10 @@ public struct ControlHandler: Sendable {
                 message: "\(request.command == .startQueue ? "Started" : "Stopped") “\(queueName)”.",
                 queues: await queueSummaries())
 
+        case .stats:
+            let stats = await manager.statistics(request.period ?? .week)
+            return ControlResponse(stats: StatsSummary(stats))
+
         case .export:
             let ids = targets.isEmpty ? nil : try await resolve(targets)
             let records = await manager.allItems

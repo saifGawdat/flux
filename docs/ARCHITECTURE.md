@@ -195,3 +195,23 @@ Filing, duplicate checks and extraction run in `DownloadManager.finishUp` once a
 - System APIs that need a bundle (notifications, Spotlight, login item) are skipped when
   Flux runs as a bare executable (`swift run Flux`).
 
+### D15 — Traffic is metered from progress; rule actions are a fixed pipeline
+- `TrafficMeter` turns the manager's snapshots into per-minute, per-site byte counts from
+  `receivedBytes` deltas: no extra hooks in the engines, media downloads count too, and a
+  download that starts over sets a new baseline instead of counting twice. Samples are
+  summed in memory and upserted every schedule tick, so the database sees one write per
+  site per 10 s, not one per progress update.
+- `Statistics` is a pure value computed from records and samples with an injected clock and
+  calendar, shared by the window and `flux stats`.
+- Rules stay "first match wins". The match is decided once, on the download as it finished,
+  so renaming or moving can't change which rule applies. Steps run in a fixed order rather
+  than a user-built list: fewer ways to build something surprising, and every step is
+  optional and can't fail the download.
+- Commands are the only way Flux runs user code. The file goes in as an argument (`$1`),
+  never into the script text, so file names can't inject anything. A command runs only
+  while the SHA-256 of its text equals the digest stored when the user approved it in the
+  UI, which keeps anything that edits settings some other way (a future sync or import) from
+  running new code. It isn't a defense against other programs running as the same user,
+  which could run code anyway. No CLI or import path can create commands.
+- notify / reveal / open are UI acts, so the manager emits `.automation` events and the app
+  performs them.

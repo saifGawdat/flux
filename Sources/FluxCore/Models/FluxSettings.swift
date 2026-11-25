@@ -48,6 +48,10 @@ public struct FluxSettings: Codable, Sendable, Equatable {
     public var indexInSpotlight: Bool
     /// System-wide shortcuts; an action without an entry has none.
     public var globalShortcuts: [GlobalShortcutAction: KeyCombo]
+    /// Commands rules can run; each runs only as approved.
+    public var commands: [AutomationCommand]
+    /// Days of per-minute traffic kept for Statistics.
+    public static let trafficRetentionDays = 90
 
     public enum DuplicateAction: String, Codable, Sendable, CaseIterable {
         /// Keep the new copy and mark it as a duplicate.
@@ -81,7 +85,8 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         notifyOnFailure: Bool = true,
         showDockProgress: Bool = true,
         indexInSpotlight: Bool = true,
-        globalShortcuts: [GlobalShortcutAction: KeyCombo] = GlobalShortcutAction.defaults
+        globalShortcuts: [GlobalShortcutAction: KeyCombo] = GlobalShortcutAction.defaults,
+        commands: [AutomationCommand] = []
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConcurrentDownloads = maxConcurrentDownloads
@@ -103,6 +108,7 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         self.showDockProgress = showDockProgress
         self.indexInSpotlight = indexInSpotlight
         self.globalShortcuts = globalShortcuts
+        self.commands = commands
     }
 
     /// Tolerates missing keys so older stored settings keep working after upgrades.
@@ -130,6 +136,7 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         indexInSpotlight = try c.decodeIfPresent(Bool.self, forKey: .indexInSpotlight) ?? defaults.indexInSpotlight
         globalShortcuts = (try? c.decodeIfPresent([GlobalShortcutAction: KeyCombo].self, forKey: .globalShortcuts))
             ?? defaults.globalShortcuts
+        commands = (try? c.decodeIfPresent([AutomationCommand].self, forKey: .commands)) ?? defaults.commands
     }
 
     /// Clamps values into supported ranges.

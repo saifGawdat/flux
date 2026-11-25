@@ -109,7 +109,7 @@ enum WindowSnapshot {
             // "clipboard": the copied-link prompt; "queues": the list of the first queue.
             // "system": Settings › System; "menubar": the menu bar window.
             let widths = ["history": 760.0, "queues": 760, "queue": 460, "import": 480, "clipboard": 340, "general": 540,
-                          "system": 540, "menubar": 346]
+                          "system": 540, "menubar": 346, "statistics": 860, "automation": 540, "rule": 520]
             renderOffscreen(to: path, width: widths[view] ?? 540, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 3,
                             dark: env["FLUX_SNAPSHOT_DARK"] == "1") {
                 let model = AppModel.shared
@@ -138,6 +138,12 @@ enum WindowSnapshot {
                         SystemSettings()
                     case "menubar":
                         MenuBarContent().background(.background)
+                    case "statistics":
+                        StatisticsView().frame(height: 720)
+                    case "automation":
+                        AutomationSettings()
+                    case "rule":
+                        RuleSnapshot()
                     default:
                         OrganizeSettings()
                     }

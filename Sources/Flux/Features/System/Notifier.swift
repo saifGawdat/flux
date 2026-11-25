@@ -87,6 +87,21 @@ final class Notifier: NSObject {
         }
     }
 
+    /// A rule's "notify" action: sent even when finished-notifications are off, and
+    /// instead of the ordinary one if that hasn't gone out yet.
+    func post(_ record: DownloadRecord, rule: String) {
+        pending.removeAll { if case .finished(let r) = $0 { r.id == record.id } else { false } }
+        guard let center else { return }
+        let content = Self.content("Download Finished", record.displayName, category: Category.finished, ids: [record.id])
+        content.subtitle = "Rule “\(rule)”"
+        if let note = record.automationNote { content.body += "\n" + note }
+        Task {
+            await requestAuthorization()
+            guard authorization == .authorized || authorization == .provisional else { return }
+            try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        }
+    }
+
     private func flush() async {
         let milestones = pending
         pending = []

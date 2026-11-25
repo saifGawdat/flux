@@ -38,6 +38,7 @@ enum SidebarItem: Hashable {
     /// nil = the main queue.
     case queue(UUID?)
     case history
+    case statistics
 }
 
 struct DownloadsView: View {
@@ -54,7 +55,7 @@ struct DownloadsView: View {
             case .status(let filter): filter.matches(item.record.status)
             case .category(let category): item.record.category == category
             case .queue(let id): item.record.queueID == id
-            case .history: false
+            case .history, .statistics: false
             }
             return shown && (search.isEmpty || item.record.matches(search))
         }
@@ -114,6 +115,8 @@ struct DownloadsView: View {
                     Label("History", systemImage: "clock.arrow.circlepath")
                         .badge(model.history.count)
                         .tag(SidebarItem.history)
+                    Label("Statistics", systemImage: "chart.bar.xaxis")
+                        .tag(SidebarItem.statistics)
                 }
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
@@ -121,6 +124,8 @@ struct DownloadsView: View {
             Group {
                 if sidebar == .history {
                     HistoryView(search: search, selection: $selection)
+                } else if sidebar == .statistics {
+                    StatisticsView()
                 } else {
                     DownloadList(items: visible, selection: $selection, emptyFilter: statusFilter,
                                  category: category, isSearching: !search.isEmpty, inQueue: isQueue)

@@ -104,6 +104,7 @@ struct DownloadRow: View {
             if let filedBy = record.filedBy { parts.append(Self.filedText(filedBy)) }
             if let extracted = record.extractedPath { parts.append("Extracted to \(extracted.lastPathComponent)") }
             if let problem = record.extractionError { parts.append("Not extracted: \(problem)") }
+            if let note = record.automationNote { parts.append(note) }
             parts.append(date)
             return parts.joined(separator: " · ")
         case .failed:

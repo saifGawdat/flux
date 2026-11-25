@@ -19,6 +19,7 @@ Usage:
   flux limit [<speed> | off]     overall speed limit, e.g. 2M, 500K
   flux queues                    named queues and what's waiting in them
   flux queue start|stop <name>
+  flux stats [day|week|month]    downloaded bytes, finished and failed, top sites
   flux ping                      check that Flux is running
 
 IDs are the first characters shown by flux list. Add --json to any command for
@@ -162,6 +163,7 @@ func emit(_ response: ControlResponse, json: Bool) throws {
     if json {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
         print(String(decoding: try encoder.encode(response), as: UTF8.self))
     } else if let message = response.message {
         print(message)
@@ -346,6 +348,30 @@ func run(_ raw: [String]) throws -> Int32 {
             if !json { print("\(response.message ?? "Exported.") Saved \(url.path)") }
         } else {
             print(text, terminator: "")
+        }
+
+    case "stats":
+        let word = rest.first?.lowercased() ?? "week"
+        let period: Statistics.Period? = switch word {
+        case "day", "today", "24h": .day
+        case "week", "7d": .week
+        case "month", "30d": .month
+        default: nil
+        }
+        guard let period else { throw Usage("Use flux stats day, week or month.") }
+        let response = try send(ControlRequest(.stats, period: period))
+        if json { try emit(response, json: true) } else {
+            guard response.ok, let stats = response.stats else { throw Failure(response.error ?? "No statistics.") }
+            print("Last \(period.title.lowercased()): \(bytes(stats.totalBytes)) downloaded, \(stats.finished) finished, \(stats.failed) failed")
+            if stats.peakBytesPerSecond > 0 { print("Fastest minute: \(speed(stats.peakBytesPerSecond))") }
+            if !stats.sites.isEmpty {
+                print("")
+                print(pad("SITE", 32) + pad("RECEIVED", 12) + "FILES")
+                for site in stats.sites {
+                    let files = "\(site.finished)" + (site.failed > 0 ? " (\(site.failed) failed)" : "")
+                    print(pad(site.host, 32) + pad(bytes(site.bytes), 12) + files)
+                }
+            }
         }
 
     case "ping":

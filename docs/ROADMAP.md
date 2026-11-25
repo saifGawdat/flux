@@ -138,9 +138,28 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
 - Not yet: hiding the window when opened at login, a progress ring in the menu bar icon,
   key names for non-US keyboard layouts in the shortcut recorder.
 
-## Phase 6 — Analytics & automation ⬜
-Bandwidth samples table + Swift Charts dashboard, per-domain stats, post-download
-action pipeline (move/rename/extract/verify/notify/reveal/approved commands).
+## Phase 6 — Analytics & automation ✅
+
+- Traffic ✅: `traffic` table (schema v8) of bytes per minute and site (the page a download came
+  from, else its host, without `www.`), counted from progress deltas while Flux runs, written
+  every 10 s and at quit, kept 90 days.
+- Statistics ✅: sidebar › Statistics with Swift Charts: 24 hours (per hour), 7 or 30 days (per
+  day), downloaded, finished, failed with success rate, fastest minute, top sites (received,
+  finished, failed), finished by kind. Refreshes every 10 s. `flux stats [day|week|month]`
+  (with `--json`).
+- Action pipeline ✅: the first matching rule now decides actions as well as the folder, in a
+  fixed order: rename → move (default-folder downloads only; "Move it to" can be off) →
+  duplicate check → extract → SHA-256 → command → notify / show in Finder / open. Actions also
+  apply to downloads saved to a folder the user picked. Results and problems are kept per
+  download (`automation_note`) and shown in the list and the Info window.
+- Rename patterns ✅: `{name}` `{title}` `{site}` `{date}` `{year}` `{month}` `{day}` `{time}`
+  `{kind}` `{playlist}` `{index}` `{id}`; the extension is kept; never overwrites.
+- Approved commands ✅: Settings › Automation; zsh with the file as `$1` and `FLUX_*` variables,
+  no profile, the file's folder as working directory, a fixed PATH, 5-minute limit, output
+  kept to the last line. Saving asks for approval of the exact text (SHA-256); a changed text
+  doesn't run until approved again. "Test on a File…" runs it once.
+- Not yet: user-ordered action steps, per-site speed history charts, CSV export of statistics,
+  verifying against a checksum file as an action.
 
 ## Phase 7 — Production ⬜
 Security audit, Developer ID signing, notarization, DMG, Sparkle updates.

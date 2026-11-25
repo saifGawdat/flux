@@ -133,6 +133,8 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     public var isArchived = false
     /// The named queue this download waits in; nil = the main queue.
     public var queueID: UUID?
+    /// What a rule's actions did, or why one failed ("Renamed by rule “Scans”", …).
+    public var automationNote: String?
 
     public init(
         id: UUID = UUID(),

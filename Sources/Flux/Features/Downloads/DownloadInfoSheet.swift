@@ -275,6 +275,9 @@ private struct DownloadInfoForm: View {
             if let filedBy = record.filedBy {
                 LabeledContent("Organized") { Text(DownloadRow.filedText(filedBy)).foregroundStyle(.secondary) }
             }
+            if let note = record.automationNote {
+                LabeledContent("Rule actions") { Text(note).foregroundStyle(.secondary).textSelection(.enabled) }
+            }
             if let duplicate = record.duplicateOf {
                 LabeledContent("Duplicate of") {
                     HStack {

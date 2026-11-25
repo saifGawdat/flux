@@ -31,7 +31,7 @@ final class EventMirror: @unchecked Sendable {
                 items[item.id] = item
             case .removed(let ids):
                 for id in ids { items[id] = nil }
-            case .settingsChanged:
+            case .settingsChanged, .automation:
                 break
             }
             maxActive = max(maxActive, items.values.filter { $0.record.status.isActive }.count)

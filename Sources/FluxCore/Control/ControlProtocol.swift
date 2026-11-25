@@ -21,7 +21,7 @@ public enum ControlProtocol {
 
 public struct ControlRequest: Codable, Sendable, Equatable {
     public enum Command: String, Codable, Sendable, CaseIterable {
-        case ping, add, list, status, pause, resume, cancel, remove, limit, queues, export
+        case ping, add, list, status, pause, resume, cancel, remove, limit, queues, export, stats
         case startQueue = "start-queue"
         case stopQueue = "stop-queue"
     }
@@ -44,12 +44,15 @@ public struct ControlRequest: Codable, Sendable, Equatable {
     public var speedLimit: Int64?
     /// `export`: file format.
     public var format: LinkListFormat?
+    /// `stats`: how far back.
+    public var period: Statistics.Period?
 
     public init(
         _ command: Command, targets: [String]? = nil, entries: [LinkListEntry]? = nil, queue: String? = nil,
         paused: Bool? = nil, trash: Bool? = nil, includeHistory: Bool? = nil, speedLimit: Int64? = nil,
-        format: LinkListFormat? = nil
+        format: LinkListFormat? = nil, period: Statistics.Period? = nil
     ) {
+        self.period = period
         self.version = ControlProtocol.version
         self.command = command
         self.targets = targets
@@ -76,9 +79,13 @@ public struct ControlResponse: Codable, Sendable, Equatable {
     public var ids: [String]?
     /// The global speed limit after the command, bytes per second (nil = none).
     public var speedLimit: Int64?
+    /// `stats`.
+    public var stats: StatsSummary?
 
     public init(ok: Bool = true, error: String? = nil, message: String? = nil, downloads: [DownloadSummary]? = nil,
-                queues: [QueueSummary]? = nil, text: String? = nil, ids: [String]? = nil, speedLimit: Int64? = nil) {
+                queues: [QueueSummary]? = nil, text: String? = nil, ids: [String]? = nil, speedLimit: Int64? = nil,
+                stats: StatsSummary? = nil) {
+        self.stats = stats
         self.ok = ok
         self.error = error
         self.message = message
@@ -90,6 +97,41 @@ public struct ControlResponse: Codable, Sendable, Equatable {
     }
 
     public static func failure(_ message: String) -> ControlResponse { ControlResponse(ok: false, error: message) }
+}
+
+/// Statistics as the command line sees them.
+public struct StatsSummary: Codable, Sendable, Equatable {
+    public struct Site: Codable, Sendable, Equatable {
+        public var host: String
+        public var bytes: Int64
+        public var finished: Int
+        public var failed: Int
+    }
+
+    public struct Bar: Codable, Sendable, Equatable {
+        public var start: Date
+        public var bytes: Int64
+    }
+
+    public var period: Statistics.Period
+    public var since: Date
+    public var totalBytes: Int64
+    public var finished: Int
+    public var failed: Int
+    public var peakBytesPerSecond: Double
+    public var sites: [Site]
+    public var bars: [Bar]
+
+    public init(_ stats: Statistics, siteLimit: Int = 10) {
+        period = stats.period
+        since = stats.start
+        totalBytes = stats.totalBytes
+        finished = stats.finished
+        failed = stats.failed
+        peakBytesPerSecond = stats.peakSpeed
+        sites = stats.sites.prefix(siteLimit).map { Site(host: $0.host, bytes: $0.bytes, finished: $0.finished, failed: $0.failed) }
+        bars = stats.bars.map { Bar(start: $0.start, bytes: $0.bytes) }
+    }
 }
 
 /// A download as the command line sees it.

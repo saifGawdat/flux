@@ -75,6 +75,15 @@ enum Schema {
         Migration(version: 7, name: "named queues", sql: """
             ALTER TABLE downloads ADD COLUMN queue_id TEXT;
             """),
+        Migration(version: 8, name: "traffic and automation", sql: """
+            CREATE TABLE traffic (
+                minute INTEGER NOT NULL,
+                host TEXT NOT NULL,
+                bytes INTEGER NOT NULL,
+                PRIMARY KEY (minute, host)
+            ) WITHOUT ROWID;
+            ALTER TABLE downloads ADD COLUMN automation_note TEXT;
+            """),
     ]
 
     static var latestVersion: Int { migrations.last?.version ?? 0 }

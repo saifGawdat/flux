@@ -95,13 +95,30 @@ public struct DownloadRule: Codable, Sendable, Equatable, Identifiable {
     /// All must match. A rule without conditions never matches.
     public var conditions: [Condition]
     public var folder: URL
+    /// false: the rule leaves the file where it is and only runs its actions.
+    public var movesFile: Bool
+    public var actions: RuleActions
 
-    public init(id: UUID = UUID(), name: String, isEnabled: Bool = true, conditions: [Condition], folder: URL) {
+    public init(id: UUID = UUID(), name: String, isEnabled: Bool = true, conditions: [Condition], folder: URL,
+                movesFile: Bool = true, actions: RuleActions = .none) {
         self.id = id
         self.name = name
         self.isEnabled = isEnabled
         self.conditions = conditions
         self.folder = folder
+        self.movesFile = movesFile
+        self.actions = actions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        conditions = try c.decode([Condition].self, forKey: .conditions)
+        folder = try c.decode(URL.self, forKey: .folder)
+        movesFile = try c.decodeIfPresent(Bool.self, forKey: .movesFile) ?? true
+        actions = (try? c.decodeIfPresent(RuleActions.self, forKey: .actions)) ?? .none
     }
 
     public func matches(_ record: DownloadRecord) -> Bool {
@@ -137,10 +154,15 @@ public enum Filing {
         public var reason: String
     }
 
+    /// The first enabled rule that matches; it decides both folder and actions.
+    public static func rule(for record: DownloadRecord, settings: FluxSettings) -> DownloadRule? {
+        settings.rules.first { $0.matches(record) }
+    }
+
     /// nil when the download should stay where it is.
     public static func destination(for record: DownloadRecord, settings: FluxSettings) -> Destination? {
-        if let rule = settings.rules.first(where: { $0.matches(record) }) {
-            return Destination(folder: rule.folder, reason: "rule “\(rule.name)”")
+        if let rule = rule(for: record, settings: settings) {
+            return rule.movesFile ? Destination(folder: rule.folder, reason: "rule “\(rule.name)”") : nil
         }
         guard settings.sortIntoCategoryFolders else { return nil }
         let category = record.category

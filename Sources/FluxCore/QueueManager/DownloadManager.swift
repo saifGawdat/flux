@@ -18,6 +18,14 @@ public actor DownloadManager {
         case updated(Item)
         case removed([UUID])
         case settingsChanged(FluxSettings)
+        /// A rule asked the app to do something with a finished download.
+        case automation(UUID, AutomationRequest)
+    }
+
+    public enum AutomationRequest: Sendable, Equatable {
+        case notify(rule: String)
+        case reveal
+        case open
     }
 
     public struct NewDownload: Sendable {
@@ -112,6 +120,8 @@ public actor DownloadManager {
     /// How often queue schedules are checked.
     public static let scheduleCheckInterval: Duration = .seconds(10)
     public private(set) var settings: FluxSettings
+    /// Bytes received per minute and site, written to the database every check.
+    private var meter = TrafficMeter()
 
     /// Loads persisted state and recovers downloads interrupted by quit or crash.
     /// Call `start()` to begin scheduling.
@@ -137,6 +147,7 @@ public actor DownloadManager {
                 recovered.append(record)
             }
             items[record.id] = Item(record: record, bytesPerSecond: 0, activeConnections: 0, detail: nil)
+            meter.observe(record) // baseline: earlier bytes aren't today's traffic
         }
         for record in recovered { try await database.save(record) }
         if !recovered.isEmpty {
@@ -183,12 +194,15 @@ public actor DownloadManager {
         }
         lastScheduleCheck = now
         if queues != settings.queues { await saveQueues(queues) }
+        let cutoff = Calendar.current.date(byAdding: .day, value: -FluxSettings.trafficRetentionDays, to: now) ?? now
+        try? await database.pruneTraffic(before: cutoff)
         await schedule()
         scheduleTask?.cancel()
         scheduleTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.scheduleCheckInterval)
                 await self?.checkSchedules()
+                await self?.flushTraffic()
             }
         }
     }
@@ -235,6 +249,7 @@ public actor DownloadManager {
         for record in records {
             let item = Item(record: record, bytesPerSecond: 0, activeConnections: 0, detail: nil)
             items[record.id] = item
+            meter.observe(record) // from zero: everything it receives counts
             broadcast(.updated(item))
         }
         await schedule()
@@ -308,6 +323,7 @@ public actor DownloadManager {
             }
             items[id] = nil
             lastSequence[id] = nil
+            meter.forget([id])
             removed.append(id)
         }
         try await database.deleteDownloads(removed)
@@ -548,11 +564,33 @@ public actor DownloadManager {
         mediaTools = tools
     }
 
+    // MARK: - Statistics
+
+    private func flushTraffic() async {
+        let samples = meter.drain()
+        guard !samples.isEmpty else { return }
+        do {
+            try await database.addTraffic(samples)
+        } catch {
+            Log.persistence.error("Couldn't save traffic: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Traffic and results for the Statistics view and `flux stats`.
+    public func statistics(_ period: Statistics.Period) async -> Statistics {
+        await flushTraffic()
+        let now = clock()
+        let since = Calendar.current.date(byAdding: .day, value: -(period.bucketCount + 1), to: now) ?? now
+        let traffic = (try? await database.traffic(since: since)) ?? []
+        return Statistics(period: period, records: items.values.map(\.record), traffic: traffic, now: now)
+    }
+
     /// Checkpoints every running download so it resumes at next launch. Call before quitting.
     public func shutdown() async {
         isStarted = false
         scheduleTask?.cancel()
         scheduleTask = nil
+        await flushTraffic()
         for (id, handle) in jobs {
             var record = await handle.job.suspendForShutdown()
             if let current = items[id] { record.priority = current.record.priority }
@@ -629,6 +667,7 @@ public actor DownloadManager {
         record.priority = current.record.priority
         record.speedLimit = current.record.speedLimit
         record.queueID = current.record.queueID
+        meter.observe(record, at: clock())
         let item = Item(
             record: record,
             bytesPerSecond: record.status.isActive ? snapshot.bytesPerSecond : 0,
@@ -654,15 +693,41 @@ public actor DownloadManager {
 
     // MARK: - After a download finishes
 
-    /// Files the download (rules, category folders), looks for an identical existing file,
-    /// and extracts archives, in that order. Each step is optional and none of them can
-    /// make a finished download fail: problems are recorded and shown instead.
+    /// The steps after a download finishes, in order: the matching rule's rename, filing
+    /// (rules, category folders), the duplicate check, extraction, SHA-256, the rule's
+    /// command, then its notify / reveal / open requests. Each step is optional and none
+    /// of them can make a finished download fail: problems are recorded and shown instead.
     private func finishUp(_ id: UUID) async {
         defer {
             finishing.remove(id)
             showDetail(id, nil)
         }
         guard let record = items[id]?.record, record.status == .completed, var file = record.finalPath else { return }
+        // Decided once, on the download as it finished (before renaming or moving it).
+        let rule = Filing.rule(for: record, settings: settings)
+        let actions = rule?.actions ?? .none
+        var notes: [String] = []
+        defer {
+            let note = notes.isEmpty ? nil : notes.joined(separator: " · ")
+            if note != nil || items[id]?.record.automationNote != nil {
+                Task { await self.update(id) { $0.automationNote = note } }
+            }
+        }
+
+        if let pattern = actions.renamePattern,
+           let name = NamePattern.apply(pattern, to: file.lastPathComponent, record: record, date: record.completedAt ?? clock()) {
+            showDetail(id, "Renaming…")
+            do {
+                let renamed = try await FileMover.move(file, into: file.deletingLastPathComponent(), name: name)
+                file = renamed
+                await update(id) {
+                    $0.finalPath = renamed
+                    $0.fileName = renamed.lastPathComponent
+                }
+            } catch {
+                notes.append("Couldn’t rename: \(error.localizedDescription)")
+            }
+        }
 
         if record.autoFile, let destination = Filing.destination(for: record, settings: settings),
            destination.folder.standardizedFileURL.path != file.deletingLastPathComponent().standardizedFileURL.path {
@@ -678,6 +743,7 @@ public actor DownloadManager {
                 }
             } catch {
                 Log.manager.error("Couldn't move \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                notes.append("Couldn’t move to \(destination.folder.lastPathComponent): \(error.localizedDescription)")
             }
         }
 
@@ -698,7 +764,7 @@ public actor DownloadManager {
             if trash { return }
         }
 
-        if settings.extractArchives, ArchiveExtractor.canExtract(file) {
+        if settings.extractArchives || actions.extract, ArchiveExtractor.canExtract(file) {
             showDetail(id, "Extracting…")
             do {
                 let output = try await ArchiveExtractor.extract(file, source: record.url)
@@ -709,9 +775,37 @@ public actor DownloadManager {
                     $0.extractionError = nil
                     if trashArchive { $0.finalPath = nil }
                 }
+                if trashArchive { file = output }
             } catch {
                 await update(id) { $0.extractionError = error.localizedDescription }
             }
+        }
+
+        if actions.computeChecksum, items[id]?.record.contentHash == nil, items[id]?.record.finalPath != nil {
+            showDetail(id, "Calculating SHA-256…")
+            if let hash = try? await Checksum.digest(of: file, algorithm: .sha256) {
+                await update(id) { $0.contentHash = hash }
+            }
+        }
+
+        if let commandID = actions.command {
+            if let command = settings.commands.first(where: { $0.id == commandID }) {
+                showDetail(id, "Running “\(command.name)”…")
+                do {
+                    let output = try await CommandRunner.run(command, file: file, record: items[id]?.record ?? record)
+                    notes.append("Ran “\(command.name)”" + (output.isEmpty ? "" : ": \(output)"))
+                } catch {
+                    notes.append(error.localizedDescription)
+                }
+            } else {
+                notes.append("The command for rule “\(rule?.name ?? "")” was deleted.")
+            }
+        }
+
+        if let rule {
+            if actions.notify { broadcast(.automation(id, .notify(rule: rule.name))) }
+            if actions.reveal { broadcast(.automation(id, .reveal)) }
+            if actions.open { broadcast(.automation(id, .open)) }
         }
     }
 

@@ -191,6 +191,13 @@ final class AppModel {
             self.settings = settings
             clipboard.update(enabled: settings.watchClipboard)
             applySystemSettings()
+        case .automation(let id, let request):
+            guard let item = index[id] else { break }
+            switch request {
+            case .notify(let rule): notifier.post(item.record, rule: rule)
+            case .reveal: reveal(item)
+            case .open: open(item)
+            }
         }
         scheduleRefresh()
     }
@@ -245,6 +252,11 @@ final class AppModel {
             await previous?.value
             await work()
         }
+    }
+
+    /// Traffic and results for the Statistics view.
+    func statistics(_ period: Statistics.Period) async -> Statistics? {
+        await manager?.statistics(period)
     }
 
     /// Re-lists every finished download in Spotlight (Settings › System).

@@ -47,9 +47,9 @@ public actor FluxDatabase {
                 group_id, group_title, group_kind, group_index, referer,
                 mirrors, speed_limit, checksum, checksum_verified, size_verified,
                 auto_file, filed_by, content_hash, duplicate_of, extracted_path, extraction_error, archived,
-                queue_id
+                queue_id, automation_note
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      ?, ?, ?, ?, ?, ?, ?, ?)
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url, file_name = excluded.file_name,
                 user_named_file = excluded.user_named_file, directory = excluded.directory,
@@ -71,7 +71,8 @@ public actor FluxDatabase {
                 auto_file = excluded.auto_file, filed_by = excluded.filed_by,
                 content_hash = excluded.content_hash, duplicate_of = excluded.duplicate_of,
                 extracted_path = excluded.extracted_path, extraction_error = excluded.extraction_error,
-                archived = excluded.archived, queue_id = excluded.queue_id
+                archived = excluded.archived, queue_id = excluded.queue_id,
+                automation_note = excluded.automation_note
             """, [
                 .text(record.id.uuidString),
                 .text(record.url.absoluteString),
@@ -114,6 +115,7 @@ public actor FluxDatabase {
                 .text(record.extractionError),
                 .bool(record.isArchived),
                 .text(record.queueID?.uuidString),
+                .text(record.automationNote),
             ])
     }
 
@@ -130,6 +132,35 @@ public actor FluxDatabase {
                 try connection.run("DELETE FROM downloads WHERE id = ?", [.text(id.uuidString)])
             }
         }
+    }
+
+    // MARK: Traffic
+
+    /// Adds bytes to the per-minute, per-site totals.
+    public func addTraffic(_ samples: [TrafficSample]) throws {
+        guard !samples.isEmpty else { return }
+        try connection.transaction {
+            for sample in samples {
+                try connection.run("""
+                    INSERT INTO traffic (minute, host, bytes) VALUES (?, ?, ?)
+                    ON CONFLICT(minute, host) DO UPDATE SET bytes = bytes + excluded.bytes
+                    """, [.integer(sample.minute), .text(sample.host), .integer(sample.bytes)])
+            }
+        }
+    }
+
+    public func traffic(since date: Date) throws -> [TrafficSample] {
+        try connection.query("SELECT minute, host, bytes FROM traffic WHERE minute >= ? ORDER BY minute",
+                             [.integer(TrafficSample.minute(of: date))]).compactMap { row in
+            guard let minute = row.int64("minute"), let host = row.string("host"), let bytes = row.int64("bytes")
+            else { return nil }
+            return TrafficSample(minute: minute, host: host, bytes: bytes)
+        }
+    }
+
+    /// Forgets traffic older than `date`.
+    public func pruneTraffic(before date: Date) throws {
+        _ = try connection.run("DELETE FROM traffic WHERE minute < ?", [.integer(TrafficSample.minute(of: date))])
     }
 
     // MARK: Settings
@@ -215,6 +246,7 @@ public actor FluxDatabase {
         record.extractionError = row.string("extraction_error")
         record.isArchived = row.bool("archived")
         record.queueID = row.string("queue_id").flatMap(UUID.init(uuidString:))
+        record.automationNote = row.string("automation_note")
         return record
     }
 }

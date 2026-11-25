@@ -486,7 +486,7 @@ extension PersistenceTests {
         do {
             let db = try FluxDatabase(url: url)
             try await db.save(record)
-            #expect(try await db.schemaVersion() == 7)
+            #expect(try await db.schemaVersion() >= 7)
         }
         let loaded = try await FluxDatabase(url: url).loadDownloads()
         #expect(loaded.first?.queueID == queue)
