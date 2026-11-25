@@ -11,6 +11,13 @@ struct AddDownloadSheet: View {
     @State private var priority: DownloadPriority = .normal
     @State private var startImmediately = true
     @State private var mediaFormat: MediaFormat?
+    @State private var preview: PreviewState = .idle
+
+    enum PreviewState {
+        case idle, loading
+        case loaded(MediaPreview)
+        case failed(String)
+    }
 
     init(initialText: String) {
         _text = State(initialValue: initialText)
@@ -19,6 +26,13 @@ struct AddDownloadSheet: View {
     private var urls: [URL] { LinkExtractor.urls(in: text) }
     private var effectiveDirectory: URL { directory ?? model.settings.downloadDirectory }
     private var hasMediaLinks: Bool { urls.contains(where: MediaRouting.prefersMedia) }
+
+    /// Sizes are looked up when exactly one video link is entered.
+    private var previewURL: URL? {
+        guard urls.count == 1, let url = urls.first, MediaRouting.prefersMedia(url), model.mediaTools.ytdlp != nil
+        else { return nil }
+        return url
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,11 +69,31 @@ struct AddDownloadSheet: View {
                 }
 
                 Section {
-                    Picker("Video format", selection: Binding(
+                    if case .loaded(let info) = preview {
+                        LabeledContent("Video") {
+                            Text(info.duration.map { "\(info.title) · \(Format.clock($0))" } ?? info.title)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    Picker(selection: Binding(
                         get: { mediaFormat ?? model.settings.defaultMediaFormat },
                         set: { mediaFormat = $0 }
                     )) {
-                        ForEach(MediaFormat.allCases) { Text($0.title).tag($0) }
+                        ForEach(MediaFormat.allCases) { Text(label(for: $0)).tag($0) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Video format")
+                            if case .loading = preview {
+                                ProgressView().controlSize(.small)
+                                Text("Checking sizes…").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if case .failed(let message) = preview {
+                        Label(message, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     if hasMediaLinks && model.mediaTools.ytdlp == nil {
                         MissingToolsNotice()
@@ -70,6 +104,7 @@ struct AddDownloadSheet: View {
                 }
             }
             .formStyle(.grouped)
+            .task(id: previewURL) { await loadPreview() }
 
             HStack {
                 Spacer()
@@ -87,6 +122,42 @@ struct AddDownloadSheet: View {
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 540)
+    }
+}
+
+extension AddDownloadSheet {
+    /// "1080p MP4 — 155.2 MB", plus the real resolution when the video is smaller than
+    /// the preset (or for Best quality).
+    func label(for format: MediaFormat) -> String {
+        guard case .loaded(let info) = preview, let option = info.options[format] else { return format.title }
+        var parts: [String] = []
+        if let height = option.height {
+            if format == .best {
+                parts.append("\(height)p")
+            } else if let cap = format.maxHeight, height < cap {
+                parts.append("only \(height)p available")
+            }
+        }
+        if let bytes = option.bytes {
+            parts.append((option.isEstimate ? "≈ " : "") + Format.bytes(bytes))
+        }
+        return parts.isEmpty ? format.title : "\(format.title) — \(parts.joined(separator: " · "))"
+    }
+
+    func loadPreview() async {
+        preview = .idle
+        guard let url = previewURL else { return }
+        // Wait for typing/pasting to settle before hitting the network.
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        preview = .loading
+        do {
+            let info = try await model.mediaPreview(for: url)
+            if !Task.isCancelled { preview = .loaded(info) }
+        } catch is CancellationError {
+        } catch {
+            if !Task.isCancelled { preview = .failed(error.localizedDescription) }
+        }
     }
 }
 

@@ -16,6 +16,19 @@ func makeFakeYTDLP() throws -> URL {
     open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-args.txt"), "w").write("\n".join(args))
     url = args[-1]
     key = url.rsplit("=", 1)[-1].rsplit("/", 1)[-1]
+    if "-J" in args:
+        if key == "fail":
+            print("ERROR: [youtube] abc123: Private video. Sign in if you've been granted access", file=sys.stderr)
+            sys.exit(1)
+        print('{"title": "Fake Video: Part 1", "duration": 120, "formats": []}')
+        sys.exit(0)
+    if "--load-info-json" in args:
+        sel = args[args.index("-f") + 1]
+        if "height<=1080" in sel: print("1920x1080|mp4|NA|30000000|1080")
+        elif "height<=720" in sel: print("640x360|mp4|9000000|NA|360")
+        elif sel.startswith("ba"): print("audio only|webm|3000000|NA|NA")
+        else: print("3840x2160|webm|NA|90000000.0|2160")
+        sys.exit(0)
     workdir = args[args.index("-P") + 1]
     print("FLUXTITLE|Fake Video: Part 1", flush=True)
     if key == "fail":
@@ -124,6 +137,50 @@ struct MediaRoutingTests {
         #expect(tools.ytdlp != nil)
         let env = MediaTools(ytdlp: fake).processEnvironment(base: ["PATH": "/usr/bin"])
         #expect(env["PATH"]?.hasPrefix(fake.deletingLastPathComponent().path) == true)
+    }
+}
+
+struct MediaProbeTests {
+    @Test func previewListsEveryFormatWithSizes() async throws {
+        let tools = MediaTools(ytdlp: try makeFakeYTDLP(), ffmpeg: URL(fileURLWithPath: "/opt/fake/ffmpeg"))
+        let preview = try await MediaProbe.preview(of: URL(string: "https://youtu.be/ok")!, tools: tools)
+
+        #expect(preview.title == "Fake Video: Part 1")
+        #expect(preview.duration == 120)
+        #expect(Set(preview.options.keys) == Set(MediaFormat.allCases))
+        #expect(preview.options[.best] == .init(height: 2160, fileExtension: "webm", bytes: 90_000_000, isEstimate: true))
+        #expect(preview.options[.mp4_1080] == .init(height: 1080, fileExtension: "mp4", bytes: 30_000_000, isEstimate: true))
+        #expect(preview.options[.mp4_720] == .init(height: 360, fileExtension: "mp4", bytes: 9_000_000, isEstimate: false))
+        let mp3 = try #require(preview.options[.mp3])
+        #expect(mp3.fileExtension == "mp3" && mp3.isEstimate && mp3.height == nil)
+        #expect(mp3.bytes == Int64(3_675_000), "estimated from duration, not the source size")
+        #expect(preview.options[.m4a]?.fileExtension == "m4a")
+    }
+
+    @Test func previewErrorsAreFriendly() async throws {
+        let tools = MediaTools(ytdlp: try makeFakeYTDLP())
+        await #expect(throws: MediaProbeError.self) {
+            try await MediaProbe.preview(of: URL(string: "https://youtu.be/fail")!, tools: tools)
+        }
+        do {
+            _ = try await MediaProbe.preview(of: URL(string: "https://youtu.be/fail")!, tools: tools)
+        } catch {
+            #expect(error.localizedDescription == "This video is private.")
+        }
+    }
+
+    @Test func previewNeedsYTDLP() async {
+        await #expect(throws: MediaProbeError.self) {
+            try await MediaProbe.preview(of: URL(string: "https://youtu.be/ok")!, tools: .none)
+        }
+    }
+
+    @Test func parsesOptionLines() {
+        let audio = MediaProbe.parseOption("audio only|webm|3000000|NA|2160", format: .m4a, hasFFmpeg: false, duration: 60)
+        #expect(audio == .init(height: nil, fileExtension: "webm", bytes: 3_000_000, isEstimate: false),
+                "audio-only ignores stray height; no conversion without ffmpeg")
+        #expect(MediaProbe.parseOption("1280x720|mp4|NA|NA|720", format: .mp4_720, hasFFmpeg: true, duration: nil)?.bytes == nil)
+        #expect(MediaProbe.parseOption("garbage", format: .best, hasFFmpeg: true, duration: nil) == nil)
     }
 }
 
@@ -324,6 +381,18 @@ struct LiveMediaTests {
             #expect(log.all.contains { $0.detail == "Merging video and audio…" })
         }
         #expect(try FileManager.default.contentsOfDirectory(atPath: out.path) == [file.lastPathComponent])
+    }
+
+    @Test func realPreviewReportsSizes() async throws {
+        let tools = MediaTools.discover()
+        try #require(tools.ytdlp != nil && tools.ffmpeg != nil, "install yt-dlp and ffmpeg")
+        let preview = try await MediaProbe.preview(of: Self.shortVideo, tools: tools)
+        #expect(preview.title == "Me at the zoo")
+        #expect(Set(preview.options.keys) == Set(MediaFormat.allCases))
+        for (format, option) in preview.options {
+            #expect((option.bytes ?? 0) > 10_000, "\(format) has a size")
+        }
+        #expect(preview.options[.mp3]?.fileExtension == "mp3")
     }
 
     @Test func realUnsupportedPageFailsClearly() async throws {

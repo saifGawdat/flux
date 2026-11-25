@@ -30,6 +30,15 @@ public enum MediaFormat: String, Codable, Sendable, CaseIterable, Identifiable {
 
     public var isAudioOnly: Bool { self == .mp3 || self == .m4a }
 
+    /// Resolution cap for the MP4 presets.
+    public var maxHeight: Int? {
+        switch self {
+        case .mp4_1080: 1080
+        case .mp4_720: 720
+        default: nil
+        }
+    }
+
     /// yt-dlp format selection. Without ffmpeg, separate video and audio streams can't be
     /// merged or converted, so pick formats that already come as one file.
     func ytdlpArguments(hasFFmpeg: Bool) -> [String] {

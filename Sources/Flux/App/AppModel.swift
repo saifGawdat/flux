@@ -189,6 +189,11 @@ final class AppModel {
         toolVersions = versions
     }
 
+    /// Fetches what each format would download for one link (title, resolution, size).
+    func mediaPreview(for url: URL) async throws -> MediaPreview {
+        try await MediaProbe.preview(of: url, tools: mediaTools)
+    }
+
     static let installCommand = "brew install yt-dlp ffmpeg"
 
     func copyInstallCommand() {
