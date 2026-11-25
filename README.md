@@ -59,6 +59,12 @@ For development, `swift run Flux` also launches the app (without a bundle identi
 ./scripts/test.sh
 ```
 
+Live checks against the real yt-dlp and YouTube (opt-in, needs network):
+
+```sh
+FLUX_LIVE_TESTS=1 ./scripts/test.sh --filter LiveMediaTests
+```
+
 Uses Swift Testing. Engine tests run against `scripts/range_server.py`, a local HTTP
 server with Range/If-Range support, throttling and redirect/Content-Disposition modes —
 no public URLs are contacted.

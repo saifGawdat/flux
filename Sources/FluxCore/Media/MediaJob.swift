@@ -160,7 +160,8 @@ public actor MediaJob: TransferJob {
             ? (record.fileName as NSString).deletingPathExtension.replacingOccurrences(of: "%", with: "%%") + ".%(ext)s"
             : "%(title).180B.%(ext)s"
         var args = [
-            "--newline", "--progress", "--no-simulate", "--no-playlist", "--continue", "--no-mtime",
+            // --print implies --quiet; --no-quiet keeps stage lines like [Merger] visible.
+            "--no-quiet", "--newline", "--progress", "--no-simulate", "--no-playlist", "--continue", "--no-mtime",
             "--retries", "10", "--fragment-retries", "10",
             "-P", workDirectory.path,
             "-o", outputName,

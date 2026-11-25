@@ -158,6 +158,7 @@ struct MediaJobTests {
         #expect(args.contains("--audio-format") && args.contains("mp3"))
         #expect(args.contains("--ffmpeg-location") && args.contains("/opt/fake/ffmpeg"))
         #expect(args.contains("--no-playlist"))
+        #expect(args.contains("--no-quiet"), "keeps post-processing stage lines visible")
         #expect(args.suffix(2) == ["--", "https://www.youtube.com/watch?v=ok"], "URL passed after -- so it can't be read as an option")
     }
 
@@ -293,5 +294,46 @@ struct MigrationUpgradeTests {
         #expect(try await db.schemaVersion() == 2)
         let record = try #require(try await db.loadDownloads().first)
         #expect(record.kind == .file && record.mediaFormat == nil)
+    }
+}
+
+/// Opt-in checks against the real yt-dlp and network: `FLUX_LIVE_TESTS=1 ./scripts/test.sh`.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["FLUX_LIVE_TESTS"] == "1"))
+struct LiveMediaTests {
+    static let shortVideo = URL(string: "https://www.youtube.com/watch?v=jNQXAC9IVRw")! // 19 s, "Me at the zoo"
+
+    @Test(arguments: [MediaFormat.mp4_720, .mp3])
+    func realYouTubeDownload(_ format: MediaFormat) async throws {
+        let tools = MediaTools.discover()
+        try #require(tools.ytdlp != nil && tools.ffmpeg != nil, "install yt-dlp and ffmpeg")
+        let out = try tempDir()
+        let record = DownloadRecord(url: Self.shortVideo, directory: out, kind: .media, mediaFormat: format)
+        let (job, log) = makeMediaJob(record, tools: tools)
+        await job.start()
+        let done = try await finish(job, log, timeout: 120)
+
+        #expect(done.status == .completed, "\(done.errorMessage ?? "")")
+        #expect(done.title == "Me at the zoo")
+        let file = try #require(done.finalPath)
+        #expect(file.pathExtension == (format == .mp3 ? "mp3" : "mp4"))
+        #expect((done.totalBytes ?? 0) > 100_000)
+        #expect(log.all.contains { $0.record.status == .downloading && $0.bytesPerSecond > 0 }, "live progress reported")
+        if format == .mp3 {
+            #expect(log.all.contains { $0.detail == "Converting audio…" })
+        } else {
+            #expect(log.all.contains { $0.detail == "Merging video and audio…" })
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: out.path) == [file.lastPathComponent])
+    }
+
+    @Test func realUnsupportedPageFailsClearly() async throws {
+        let tools = MediaTools.discover()
+        try #require(tools.ytdlp != nil)
+        let record = DownloadRecord(url: URL(string: "https://example.com/")!, directory: try tempDir(), kind: .media)
+        let (job, log) = makeMediaJob(record, tools: tools)
+        await job.start()
+        let done = try await finish(job, log, timeout: 60)
+        #expect(done.status == .failed)
+        #expect(done.errorMessage == "No downloadable media found on this page.")
     }
 }
