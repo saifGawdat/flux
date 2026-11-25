@@ -44,10 +44,26 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
 - Not yet: managed tool install/updates inside Flux, cookies/sign-in from inside Flux,
   subtitle download, numbering files by playlist position.
 
-## Phase 2 — Download engine ⬜
-Per-download/global bandwidth limits (token bucket shared across jobs), SHA-256
-verification against user-supplied checksums, mirrors, expired-URL refresh flow,
-explicit Content-Length validation surfaced in UI, priority editing in UI.
+## Phase 2 — Download engine ✅
+
+- Bandwidth limits ✅: global (shared token bucket) and per download, changeable while
+  running. Ranged downloads pace their requests (half a second of data per request);
+  servers without ranges are paused per connection; yt-dlp is held with SIGSTOP/SIGCONT.
+  Under a limit Flux opens one connection per 1 MB/s of allowed speed.
+- Checksums ✅: SHA-256, SHA-1, SHA-512, MD5 (recognized by length; pasted `shasum` lines
+  work). Verified off the job's actor before the part file becomes the final file; a
+  mismatch discards the data so Retry starts clean. Finished files can be checked later,
+  and their SHA-256 calculated.
+- Mirrors ✅: connections spread across all links; a mirror with another size, range
+  errors or permanent HTTP errors is dropped; a dead main link fails over to mirrors.
+- Expired-URL refresh ✅: Update Link… on any unfinished download; the new link is probed
+  (size, ranges, page vs file) and the download continues from where it stopped.
+- Size validation surfaced ✅: `sizeVerified` per download, seal in the list, size check in
+  the Info window; "size unknown" while downloading streams without a stated size.
+- Priority editing ✅: context menu, group header and Info window.
+- Fixed along the way: servers with unquoted ETags or that ignore If-Range (e.g. Wikimedia's
+  CDN) no longer restart multi-connection downloads from scratch.
+- Not yet: per-host connection limits, scheduled speed limits (Phase 4 schedules).
 
 ## Phase 3 — Smart management ⬜
 Category folders, rule engine (extension / pattern / domain / size / category),

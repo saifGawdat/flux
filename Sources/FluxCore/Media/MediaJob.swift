@@ -35,12 +35,23 @@ public actor MediaJob: TransferJob {
     private var streamCount = 0
     private var sequence: UInt64 = 0
     private var lastEmit: TimeInterval = 0
+    private let sharedLimiter: SpeedLimiter?
+    private let ownLimiter = SpeedLimiter()
+    /// Bytes yt-dlp had reported for the current stream, to charge only the difference.
+    private var lastReported: (format: String?, bytes: Int64)?
+    /// yt-dlp is held with SIGSTOP because a speed limit was reached.
+    private var isHeld = false
 
-    public init(record: DownloadRecord, tools: MediaTools, onUpdate: @escaping @Sendable (TransferSnapshot) -> Void) {
+    public init(
+        record: DownloadRecord, tools: MediaTools, limiter: SpeedLimiter? = nil,
+        onUpdate: @escaping @Sendable (TransferSnapshot) -> Void
+    ) {
         self.id = record.id
         self.record = record
         self.tools = tools
+        self.sharedLimiter = limiter
         self.onUpdate = onUpdate
+        ownLimiter.setLimit(record.speedLimit)
     }
 
     public var currentRecord: DownloadRecord { record }
@@ -67,6 +78,8 @@ public actor MediaJob: TransferJob {
         }
 
         stopIntent = nil
+        lastReported = nil
+        isHeld = false
         lastError = nil
         finalFile = nil
         speed = 0
@@ -153,6 +166,58 @@ public actor MediaJob: TransferJob {
         return record
     }
 
+    public func setSpeedLimit(_ bytesPerSecond: Int64?) {
+        record.speedLimit = bytesPerSecond
+        ownLimiter.setLimit(bytesPerSecond)
+        if isHeld { release(run: runID) }
+    }
+
+    // MARK: - Speed limits
+
+    /// yt-dlp can't share a limit with other downloads, so Flux charges the bytes it
+    /// reports to the same token buckets as file downloads and holds the process with
+    /// SIGSTOP when they run dry. A stopped process stops reading its sockets, so the
+    /// server backs off; SIGCONT lets it carry on exactly where it was.
+    private var limiters: [SpeedLimiter] { [ownLimiter] + (sharedLimiter.map { [$0] } ?? []) }
+
+    private func charge(format: String?, downloaded: Int64) {
+        defer { lastReported = (format, downloaded) }
+        // The first report of a stream (or of a resumed run) includes bytes from before.
+        guard let last = lastReported, last.format == format, downloaded >= last.bytes else { return }
+        let wait = limiters.consume(downloaded - last.bytes)
+        if wait > 0.05, !isHeld, let process, process.isRunning {
+            isHeld = true
+            signalTree(process.processIdentifier, SIGSTOP)
+            scheduleRelease(after: wait, run: runID)
+        }
+    }
+
+    private func scheduleRelease(after wait: TimeInterval, run: Int) {
+        Task {
+            try? await Task.sleep(for: .seconds(min(max(wait, 0.01), 1)))
+            self.release(run: run)
+        }
+    }
+
+    private func release(run: Int) {
+        guard isHeld, run == runID, let process else { return }
+        let wait = limiters.delay()
+        if wait > 0.05, stopIntent == nil {
+            scheduleRelease(after: wait, run: run)
+            return
+        }
+        isHeld = false
+        signalTree(process.processIdentifier, SIGCONT)
+    }
+
+    /// Signals yt-dlp and its helpers (ffmpeg downloads some streams itself).
+    private nonisolated func signalTree(_ pid: pid_t, _ signal: Int32) {
+        var children = [pid_t](repeating: 0, count: 64)
+        let count = proc_listchildpids(pid, &children, Int32(children.count * MemoryLayout<pid_t>.size))
+        for child in children.prefix(max(0, Int(count))) where child > 0 { kill(child, signal) }
+        kill(pid, signal)
+    }
+
     // MARK: - Process
 
     private func arguments() -> [String] {
@@ -181,6 +246,11 @@ public actor MediaJob: TransferJob {
     private func stopProcess(intent: DownloadStatus) async {
         guard let process else { return }
         stopIntent = intent
+        if isHeld {
+            // A stopped process can't act on SIGINT until it is continued.
+            isHeld = false
+            signalTree(process.processIdentifier, SIGCONT)
+        }
         if process.isRunning { process.interrupt() }
         let run = runID
         let pid = process.processIdentifier
@@ -249,6 +319,7 @@ public actor MediaJob: TransferJob {
             }
             let downloaded = p.downloaded ?? 0
             let total = p.total ?? p.estimate
+            if p.status == "downloading" { charge(format: p.formatID, downloaded: downloaded) }
             record.totalBytes = total
             record.segments = [Segment(start: 0, end: total.map { max($0, downloaded) - 1 } ?? .max, received: downloaded)]
             record.status = .downloading

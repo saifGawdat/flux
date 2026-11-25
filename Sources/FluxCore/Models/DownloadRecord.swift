@@ -44,6 +44,16 @@ public struct Segment: Codable, Sendable, Equatable {
     public var isComplete: Bool { remaining == 0 }
 }
 
+public enum ChecksumState: Sendable, Equatable {
+    /// No checksum was supplied.
+    case none
+    /// Checked when the download finishes.
+    case pending
+    case verified
+    /// The finished file has a different checksum.
+    case mismatch
+}
+
 /// Downloads added together from one playlist, image gallery or web page.
 public struct DownloadGroup: Codable, Sendable, Equatable, Hashable {
     public enum Kind: String, Codable, Sendable {
@@ -94,6 +104,18 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     public var groupIndex: Int = 0
     /// Page the link was found on; sent as `Referer`, which some image hosts require.
     public var referer: URL?
+    /// Other links serving the same file. Flux spreads connections across them and keeps
+    /// going when one fails.
+    public var mirrors: [URL] = []
+    /// This download's own speed cap in bytes per second (the global limit also applies).
+    public var speedLimit: Int64?
+    /// The checksum the finished file must have, if the user supplied one.
+    public var checksum: Checksum?
+    /// The finished file matched `checksum`.
+    public var checksumVerified = false
+    /// The server stated the file size up front and the finished file has exactly that
+    /// many bytes. False when the server never said how big the file is.
+    public var sizeVerified = false
 
     public init(
         id: UUID = UUID(),
@@ -123,6 +145,19 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     }
 
     public var receivedBytes: Int64 { segments.reduce(0) { $0 + $1.received } }
+
+    /// The main link followed by its mirrors, without duplicates.
+    public var sources: [URL] {
+        var seen = Set<URL>()
+        return ([url] + mirrors).filter { seen.insert($0).inserted }
+    }
+
+    /// Where a supplied checksum stands.
+    public var checksumState: ChecksumState {
+        guard checksum != nil else { return .none }
+        if checksumVerified { return .verified }
+        return status == .completed ? .mismatch : .pending
+    }
 
     /// What to show as the name: the media title once known, else the file name.
     public var displayName: String { kind == .media ? (title ?? fileName) : fileName }

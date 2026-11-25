@@ -39,6 +39,12 @@ public actor DownloadManager {
         /// Playlist or gallery this download belongs to, and its position there.
         public var group: DownloadGroup?
         public var groupIndex: Int
+        /// Other links to the same file.
+        public var mirrors: [URL]
+        /// Checksum the finished file must match.
+        public var checksum: Checksum?
+        /// This download's own speed cap, bytes per second.
+        public var speedLimit: Int64?
 
         public init(
             url: URL,
@@ -53,7 +59,10 @@ public actor DownloadManager {
             thumbnailURL: URL? = nil,
             referer: URL? = nil,
             group: DownloadGroup? = nil,
-            groupIndex: Int = 0
+            groupIndex: Int = 0,
+            mirrors: [URL] = [],
+            checksum: Checksum? = nil,
+            speedLimit: Int64? = nil
         ) {
             self.url = url
             self.directory = directory
@@ -68,6 +77,9 @@ public actor DownloadManager {
             self.referer = referer
             self.group = group
             self.groupIndex = groupIndex
+            self.mirrors = mirrors
+            self.checksum = checksum
+            self.speedLimit = speedLimit
         }
     }
 
@@ -77,7 +89,9 @@ public actor DownloadManager {
     }
 
     private let database: FluxDatabase
-    private let jobOptions: DownloadJob.Options
+    private var jobOptions: DownloadJob.Options
+    /// The global speed limit: one bucket every running download draws from.
+    private let globalLimiter = SpeedLimiter()
     public private(set) var mediaTools: MediaTools
     private var items: [UUID: Item] = [:]
     private var jobs: [UUID: JobHandle] = [:]
@@ -98,6 +112,8 @@ public actor DownloadManager {
         self.mediaTools = mediaTools
         let settings = try await database.loadSettings()
         self.settings = settings
+        globalLimiter.setLimit(settings.effectiveSpeedLimit)
+        self.jobOptions.sharedLimiter = globalLimiter
         var recovered: [DownloadRecord] = []
         for var record in try await database.loadDownloads() {
             if record.status.isActive {
@@ -148,8 +164,10 @@ public actor DownloadManager {
 
     @discardableResult
     public func add(_ requests: [NewDownload]) async throws -> [UUID] {
-        for request in requests where !LinkExtractor.isDownloadable(request.url) {
-            throw FluxError.unsupportedURL(request.url.absoluteString)
+        for request in requests {
+            for url in [request.url] + request.mirrors where !LinkExtractor.isDownloadable(url) {
+                throw FluxError.unsupportedURL(url.absoluteString)
+            }
         }
         // One timestamp for the batch: a playlist keeps its order in the list and queue.
         let now = Date()
@@ -174,6 +192,9 @@ public actor DownloadManager {
             record.referer = request.referer
             record.group = request.group
             record.groupIndex = request.groupIndex
+            record.mirrors = request.mirrors.filter { $0 != request.url }
+            record.checksum = request.checksum
+            record.speedLimit = request.speedLimit.flatMap { $0 > 0 ? $0 : nil }
             records.append(record)
         }
         try await database.save(records)
@@ -267,10 +288,99 @@ public actor DownloadManager {
         await schedule()
     }
 
+    /// Caps the speed of individual downloads (nil removes the cap). Applies immediately.
+    public func setSpeedLimit(_ bytesPerSecond: Int64?, for ids: some Collection<UUID>) async {
+        let limit = bytesPerSecond.flatMap { $0 > 0 ? max($0, FluxSettings.minimumSpeedLimit) : nil }
+        for id in ids where items[id] != nil {
+            await update(id) { $0.speedLimit = limit }
+            await jobs[id]?.job.setSpeedLimit(limit)
+        }
+    }
+
+    /// Points a download at a new link, e.g. after the old one expired, keeping the data
+    /// already downloaded. If the new link serves a different file (another size), the
+    /// engine notices on the first request and starts over. A failed download is retried.
+    public func updateLink(_ id: UUID, to url: URL) async throws {
+        guard LinkExtractor.isDownloadable(url) else { throw FluxError.unsupportedURL(url.absoluteString) }
+        try await edit(id, retry: true) {
+            $0.url = url
+            $0.mirrors.removeAll { $0 == url }
+            // Validators belong to the old server; the size check still guards the data.
+            $0.etag = nil
+            $0.lastModified = nil
+        }
+    }
+
+    /// Replaces a download's mirror links.
+    public func setMirrors(_ mirrors: [URL], for id: UUID) async throws {
+        for url in mirrors where !LinkExtractor.isDownloadable(url) {
+            throw FluxError.unsupportedURL(url.absoluteString)
+        }
+        try await edit(id, retry: false) { record in
+            var seen: Set<URL> = [record.url]
+            record.mirrors = mirrors.filter { seen.insert($0).inserted }
+        }
+    }
+
+    /// Sets (or clears) the checksum a download must match. For a finished download the
+    /// file is checked right away and the result returned; otherwise it is checked when
+    /// the download finishes and nil is returned.
+    @discardableResult
+    public func setChecksum(_ checksum: Checksum?, for id: UUID) async throws -> Bool? {
+        guard let item = items[id] else { throw FluxError.unknownDownload(id) }
+        guard item.record.status == .completed else {
+            try await edit(id, retry: false) {
+                $0.checksum = checksum
+                $0.checksumVerified = false
+            }
+            return nil
+        }
+        var matches = false
+        if let checksum {
+            guard let file = item.record.finalPath, FileManager.default.fileExists(atPath: file.path) else {
+                throw FluxError.fileMissing
+            }
+            matches = try await checksum.matches(file)
+        }
+        await update(id) {
+            $0.checksum = checksum
+            $0.checksumVerified = matches
+        }
+        return checksum == nil ? nil : matches
+    }
+
+    /// Changes what a download fetches. A running download is paused, changed and resumed;
+    /// its job is rebuilt from the edited record.
+    private func edit(_ id: UUID, retry: Bool, _ change: (inout DownloadRecord) -> Void) async throws {
+        guard let item = items[id] else { throw FluxError.unknownDownload(id) }
+        guard item.record.status != .completed else { throw FluxError.alreadyFinished }
+        let wasRunning = item.record.status.isActive
+        if wasRunning, let handle = jobs[id] {
+            await apply(await handle.job.pause())
+        }
+        dropJob(id)
+        let resume = wasRunning || (retry && item.record.status == .failed)
+        await update(id) {
+            change(&$0)
+            if resume {
+                $0.status = .queued
+                $0.errorMessage = nil
+            }
+        }
+        await schedule()
+    }
+
     public func updateSettings(_ newValue: FluxSettings) async throws {
         let normalized = newValue.normalized()
         try await database.save(normalized)
+        let limitChanged = normalized.effectiveSpeedLimit != settings.effectiveSpeedLimit
         settings = normalized
+        if limitChanged {
+            globalLimiter.setLimit(normalized.effectiveSpeedLimit)
+            for (id, handle) in jobs {
+                await handle.job.setSpeedLimit(items[id]?.record.speedLimit)
+            }
+        }
         broadcast(.settingsChanged(normalized))
         await schedule()
     }
@@ -320,7 +430,7 @@ public actor DownloadManager {
         let report: @Sendable (TransferSnapshot) -> Void = { continuation.yield($0) }
         let job: any TransferJob = switch record.kind {
         case .file: DownloadJob(record: record, options: jobOptions, onUpdate: report)
-        case .media: MediaJob(record: record, tools: mediaTools, onUpdate: report)
+        case .media: MediaJob(record: record, tools: mediaTools, limiter: globalLimiter, onUpdate: report)
         }
         jobs[id] = JobHandle(job: job, continuation: continuation)
         lastSequence[id] = 0
@@ -336,7 +446,8 @@ public actor DownloadManager {
         jobs.removeValue(forKey: id)?.continuation.finish()
     }
 
-    /// Merges a job snapshot. The job owns transfer state; the manager owns `priority`.
+    /// Merges a job snapshot. The job owns transfer state; the manager owns `priority`
+    /// and `speedLimit`.
     private func apply(_ snapshot: TransferSnapshot) async {
         let id = snapshot.record.id
         guard let current = items[id], snapshot.sequence > (lastSequence[id] ?? 0)
@@ -348,6 +459,7 @@ public actor DownloadManager {
         }
         var record = snapshot.record
         record.priority = current.record.priority
+        record.speedLimit = current.record.speedLimit
         let item = Item(
             record: record,
             bytesPerSecond: record.status.isActive ? snapshot.bytesPerSecond : 0,

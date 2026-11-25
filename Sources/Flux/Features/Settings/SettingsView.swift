@@ -54,6 +54,21 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("Speed") {
+                Toggle("Limit total download speed", isOn: Binding(
+                    get: { model.settings.speedLimitEnabled },
+                    set: { value in model.setGlobalSpeedLimit(enabled: value) }
+                ))
+                LabeledContent("All downloads together") {
+                    SpeedAmountField(bytesPerSecond: Binding(
+                        get: { model.settings.speedLimit },
+                        set: { value in model.setGlobalSpeedLimit(enabled: model.settings.speedLimitEnabled, amount: value) }))
+                }
+                .disabled(!model.settings.speedLimitEnabled)
+                Text("Shared by every running download, including videos. Individual downloads can have their own limit too (right-click › Speed Limit). Toggle quickly with ⌥⌘L or from the speed in the status bar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .fluxBackground()

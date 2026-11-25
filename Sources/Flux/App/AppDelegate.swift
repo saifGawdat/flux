@@ -42,8 +42,18 @@ enum WindowSnapshot {
     static func runIfRequested() {
         let env = ProcessInfo.processInfo.environment
         if let link = env["FLUX_SNAPSHOT_ADD"], let path = env["FLUX_SNAPSHOT"] {
-            renderAddSheet(link: link, to: path, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 15,
-                           dark: env["FLUX_SNAPSHOT_DARK"] == "1")
+            renderOffscreen(to: path, width: 600, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 15,
+                            dark: env["FLUX_SNAPSHOT_DARK"] == "1") { AddDownloadSheet(initialText: link) }
+            return
+        }
+        if let index = env["FLUX_SNAPSHOT_INFO"].flatMap(Int.init), let path = env["FLUX_SNAPSHOT"] {
+            let editLink = env["FLUX_SNAPSHOT_EDITLINK"] == "1"
+            renderOffscreen(to: path, width: 560, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 3,
+                            dark: env["FLUX_SNAPSHOT_DARK"] == "1") {
+                let model = AppModel.shared
+                let id = model.downloads.indices.contains(index) ? model.downloads[index].id : UUID()
+                return DownloadInfoSheet(request: InfoSheetRequest(download: id, editLink: editLink))
+            }
             return
         }
         guard let path = env["FLUX_SNAPSHOT"] else { return }
@@ -91,25 +101,29 @@ enum WindowSnapshot {
         }
     }
 
-    /// `FLUX_SNAPSHOT_ADD=<link>`: the add sheet for that link, drawn in an off-screen
-    /// window (AppKit controls render there, unlike ImageRenderer) once the link is inspected.
+    /// `FLUX_SNAPSHOT_ADD=<link>`: the add sheet for that link; `FLUX_SNAPSHOT_INFO=<n>`:
+    /// the Info sheet of the n-th download in the list (`FLUX_SNAPSHOT_EDITLINK=1` opens
+    /// it on changing the link). Drawn in an off-screen window (AppKit controls render
+    /// there, unlike ImageRenderer) after `FLUX_SNAPSHOT_WAIT` seconds.
     @MainActor
-    private static func renderAddSheet(link: String, to path: String, wait: Double, dark: Bool) {
+    private static func renderOffscreen<Content: View>(
+        to path: String, width: CGFloat, wait: Double, dark: Bool, _ content: @escaping @MainActor () -> Content
+    ) {
         Task {
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .seconds(1.5))
             NSApp.windows.forEach { $0.orderOut(nil) }
             let model = AppModel.shared
-            let host = NSHostingView(rootView: AddDownloadSheet(initialText: link)
+            let host = NSHostingView(rootView: content()
                 .environment(model)
                 .environment(\.colorScheme, dark ? .dark : .light))
-            let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 600, height: 900),
+            let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: width, height: 900),
                                   styleMask: [.borderless], backing: .buffered, defer: false)
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             window.contentView = host
             window.orderFrontRegardless()
             try? await Task.sleep(for: .seconds(wait))
             let size = host.fittingSize
-            window.setContentSize(NSSize(width: 600, height: min(max(size.height, 300), 1400)))
+            window.setContentSize(NSSize(width: width, height: min(max(size.height, 300), 1400)))
             host.layoutSubtreeIfNeeded()
             try? await Task.sleep(for: .seconds(1.5))
             if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {

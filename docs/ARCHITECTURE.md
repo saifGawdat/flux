@@ -112,3 +112,32 @@ kind) and a `groupIndex`:
   `groupIndex`, so a playlist is listed and downloaded in playlist order.
 - The list draws a header for each run of consecutive group members (big groups start
   collapsed). Group actions are just the existing intents applied to the members' ids.
+
+### D10 — Speed limits pace requests instead of pausing sockets
+One `SpeedLimiter` (token bucket, lock-protected, may go into debt) is shared by every job
+for the global limit; each job has its own for a per-download limit. Bytes are charged
+after they arrive and the slowest bucket decides the wait.
+
+Pausing a `URLSessionDataTask` does **not** stop CFNetwork from reading the socket: it keeps
+buffering in memory and delivers everything on resume (measured: 7 MB in one burst at a
+"1 MB/s" limit). So under a limit, ranged downloads ask for ~0.5 s of data per request
+(`Range: bytes=a-b`) and only send the next request when the bucket is out of debt; a
+server can't send more than was asked. Keep-alive makes the extra requests cheap. Servers
+without ranges fall back to suspending the task (best effort). yt-dlp downloads are
+charged from their progress lines and held with SIGSTOP/SIGCONT (yt-dlp and its children),
+which does stop socket reads. Overshoot is at most one chunk per connection.
+
+### D11 — Mirrors, validators and verification
+- `DownloadRecord.sources` = main link + mirrors. The probe uses the first usable link;
+  segment connections go to the usable link with the fewest connections. The link whose
+  first response defined the file is the reference: a different size from another link
+  drops that link (never the download); from the reference it means the file changed.
+- If-Range is sent only to the main link, and only with a strong, quoted ETag (else
+  Last-Modified). A full 200 reply to an If-Range request whose size and validators still
+  match means the server ignores If-Range: Flux stops sending it instead of restarting.
+- A checksum is verified on the finished part file, off the actor, before the rename, so a
+  bad file never appears under its real name. `sizeVerified` records that the server
+  stated the size up front (finalize already refuses any other size).
+- Editing link, mirrors or checksum of a running download pauses it, rebuilds its job from
+  the edited record and resumes; new-link validators are cleared and the size check guards
+  the kept data.

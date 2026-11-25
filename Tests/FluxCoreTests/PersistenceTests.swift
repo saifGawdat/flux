@@ -37,6 +37,11 @@ struct PersistenceTests {
         record.finalPath = URL(fileURLWithPath: "/tmp/dl/custom.zip")
         record.completedAt = Date(timeIntervalSince1970: 1_700_000_100)
         record.thumbnailURL = URL(string: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg")
+        record.mirrors = [URL(string: "https://mirror1.example.com/a.zip")!, URL(string: "https://mirror2.example.com/a.zip")!]
+        record.speedLimit = 512_000
+        record.checksum = Checksum(algorithm: .sha256, hex: String(repeating: "c", count: 64))
+        record.checksumVerified = true
+        record.sizeVerified = true
 
         try await db.save(record)
         try await db.save(record) // upsert, not duplicate

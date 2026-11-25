@@ -19,6 +19,10 @@ struct AddDownloadSheet: View {
     /// Images whose loaded preview turned out to be icon-sized.
     @State private var smallImages: Set<Int> = []
     @State private var useFolder = true
+    /// The user's answer to "these links are mirrors"; nil = guess from the file names.
+    @State private var mirrorsChoice: Bool?
+    @State private var checksumText = ""
+    @State private var speedLimit: Int64?
 
     enum InspectionState {
         case idle
@@ -39,6 +43,19 @@ struct AddDownloadSheet: View {
     private var effectiveDirectory: URL { directory ?? model.settings.downloadDirectory }
     private var effectiveFormat: MediaFormat { mediaFormat ?? model.settings.defaultMediaFormat }
     private var hasMediaLinks: Bool { urls.contains(where: MediaRouting.prefersMedia) }
+
+    /// Plain file links (nothing found to choose from), where mirrors and checksums apply.
+    private var isPlainFiles: Bool { activeChoice == nil && !urls.isEmpty && !hasMediaLinks && !isLoading }
+    /// Links that all end in the same file name are most likely copies of one file.
+    private var linksAreMirrors: Bool {
+        mirrorsChoice ?? (Set(urls.map { $0.lastPathComponent.lowercased() }).count == 1 && !(urls.first?.lastPathComponent ?? "/").hasPrefix("/"))
+    }
+    /// Several links offered as copies of one file.
+    private var mirrorMode: Bool { isPlainFiles && urls.count > 1 && linksAreMirrors }
+    /// One file will be added, so a checksum can apply to it.
+    private var takesChecksum: Bool { isPlainFiles && (urls.count == 1 || mirrorMode) }
+    private var checksum: Checksum? { takesChecksum ? Checksum.parse(checksumText) : nil }
+    private var checksumIsInvalid: Bool { takesChecksum && !checksumText.trimmingCharacters(in: .whitespaces).isEmpty && checksum == nil }
 
     /// A single page link is looked at before adding (video sizes, playlists, images).
     private var inspectURL: URL? {
@@ -74,6 +91,7 @@ struct AddDownloadSheet: View {
                 case .images: imagesSection
                 case nil: if hasMediaLinks || isLoading { plainFormatSection }
                 }
+                if isPlainFiles { fileOptionsSection }
                 saveSection
             }
             .formStyle(.grouped)
@@ -95,7 +113,7 @@ struct AddDownloadSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(requests.isEmpty)
+                .disabled(requests.isEmpty || checksumIsInvalid)
             }
             .padding([.horizontal, .bottom], 20)
         }
@@ -245,6 +263,35 @@ struct AddDownloadSheet: View {
         }
     }
 
+    private var fileOptionsSection: some View {
+        Section {
+            if urls.count > 1 {
+                Toggle("These links are mirrors of one file", isOn: Binding(
+                    get: { linksAreMirrors }, set: { mirrorsChoice = $0 }))
+            }
+            if takesChecksum {
+                LabeledContent("Checksum") {
+                    TextField("Checksum", text: $checksumText, prompt: Text("Optional: SHA-256, SHA-1, SHA-512 or MD5"))
+                        .labelsHidden()
+                        .font(.callout.monospaced())
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+        } footer: {
+            Group {
+                if checksumIsInvalid {
+                    Text("That doesn't look like a SHA-256, SHA-1, SHA-512 or MD5 checksum.").foregroundStyle(.orange)
+                } else if mirrorMode {
+                    Text("One download from the first link, with the others as mirrors: Flux spreads connections across them and keeps going if one fails.")
+                        .foregroundStyle(.secondary)
+                } else if let checksum {
+                    Text("The finished file is checked against this \(checksum.algorithm.title) before it's saved.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     private var saveSection: some View {
         Section {
             LabeledContent("Save to") {
@@ -264,6 +311,7 @@ struct AddDownloadSheet: View {
             Picker("Priority", selection: $priority) {
                 ForEach(DownloadPriority.allCases.reversed(), id: \.self) { Text($0.title).tag($0) }
             }
+            SpeedLimitPicker(title: "Speed limit", limit: $speedLimit)
             Toggle("Start immediately", isOn: $startImmediately)
         }
     }
@@ -336,17 +384,24 @@ struct AddDownloadSheet: View {
         let folder = groupTitle.flatMap { useFolder ? effectiveDirectory.appendingPathComponent(FileNaming.sanitize($0), isDirectory: true) : nil }
         let directory = folder ?? effectiveDirectory
         guard let url = inspectURL, let found, let choice = activeChoice else {
+            if mirrorMode, let main = urls.first {
+                return [DownloadManager.NewDownload(
+                    url: main, directory: effectiveDirectory, connections: connections, priority: priority,
+                    startImmediately: startImmediately, kind: .file, mirrors: Array(urls.dropFirst()),
+                    checksum: checksum, speedLimit: speedLimit)]
+            }
             return urls.map {
                 DownloadManager.NewDownload(
                     url: $0, directory: effectiveDirectory, connections: connections, priority: priority,
-                    startImmediately: startImmediately, mediaFormat: mediaFormat)
+                    startImmediately: startImmediately, mediaFormat: mediaFormat,
+                    checksum: checksum, speedLimit: speedLimit)
             }
         }
         switch choice {
         case .video:
             return [DownloadManager.NewDownload(
                 url: url, directory: directory, priority: priority, startImmediately: startImmediately,
-                kind: .media, mediaFormat: effectiveFormat, title: found.media?.video?.title)]
+                kind: .media, mediaFormat: effectiveFormat, title: found.media?.video?.title, speedLimit: speedLimit)]
         case .playlist:
             guard let playlist = found.media?.playlist else { return [] }
             let entries = selectedEntries(of: playlist)
@@ -355,7 +410,7 @@ struct AddDownloadSheet: View {
                 DownloadManager.NewDownload(
                     url: entry.url, directory: directory, priority: priority, startImmediately: startImmediately,
                     kind: .media, mediaFormat: effectiveFormat, title: entry.title, thumbnailURL: entry.thumbnailURL,
-                    group: group, groupIndex: index)
+                    group: group, groupIndex: index, speedLimit: speedLimit)
             }
         case .images:
             guard let images = found.images else { return [] }
@@ -367,13 +422,14 @@ struct AddDownloadSheet: View {
                     priority: priority, startImmediately: startImmediately,
                     kind: item.needsMediaExtractor ? .media : .file,
                     mediaFormat: item.needsMediaExtractor ? effectiveFormat : nil,
-                    referer: images.pageURL, group: group, groupIndex: index)
+                    referer: images.pageURL, group: group, groupIndex: index, speedLimit: speedLimit)
             }
         }
     }
 
     private var addTitle: String {
         let count = requests.count
+        if mirrorMode { return "Add Download with \(urls.count - 1) Mirror\(urls.count == 2 ? "" : "s")" }
         guard count > 1 else { return "Add Download" }
         switch activeChoice {
         case .playlist: return "Download \(count) Videos"

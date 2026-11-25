@@ -37,14 +37,16 @@ public actor FluxDatabase {
 
     public func save(_ record: DownloadRecord) throws {
         let segments = String(decoding: try encoder.encode(record.segments), as: UTF8.self)
+        let mirrors = String(decoding: try encoder.encode(record.mirrors.map(\.absoluteString)), as: UTF8.self)
         try connection.run("""
             INSERT INTO downloads (
                 id, url, file_name, user_named_file, directory, total_bytes, received_bytes,
                 supports_ranges, etag, last_modified, segments, status, error_message, priority,
                 max_connections, part_file_name, final_path, created_at, completed_at,
                 kind, media_format, title, thumbnail_url,
-                group_id, group_title, group_kind, group_index, referer
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                group_id, group_title, group_kind, group_index, referer,
+                mirrors, speed_limit, checksum, checksum_verified, size_verified
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url, file_name = excluded.file_name,
                 user_named_file = excluded.user_named_file, directory = excluded.directory,
@@ -59,7 +61,10 @@ public actor FluxDatabase {
                 thumbnail_url = excluded.thumbnail_url,
                 group_id = excluded.group_id, group_title = excluded.group_title,
                 group_kind = excluded.group_kind, group_index = excluded.group_index,
-                referer = excluded.referer
+                referer = excluded.referer,
+                mirrors = excluded.mirrors, speed_limit = excluded.speed_limit,
+                checksum = excluded.checksum, checksum_verified = excluded.checksum_verified,
+                size_verified = excluded.size_verified
             """, [
                 .text(record.id.uuidString),
                 .text(record.url.absoluteString),
@@ -89,6 +94,11 @@ public actor FluxDatabase {
                 .text(record.group?.kind.rawValue),
                 .integer(Int64(record.groupIndex)),
                 .text(record.referer?.absoluteString),
+                .text(mirrors),
+                .integer(record.speedLimit),
+                .text(record.checksum?.description),
+                .bool(record.checksumVerified),
+                .bool(record.sizeVerified),
             ])
     }
 
@@ -176,6 +186,12 @@ public actor FluxDatabase {
         }
         record.groupIndex = Int(row.int64("group_index") ?? 0)
         record.referer = row.string("referer").flatMap(Thumbnails.remote)
+        let mirrors = (try? decoder.decode([String].self, from: Data((row.string("mirrors") ?? "[]").utf8))) ?? []
+        record.mirrors = mirrors.compactMap(Thumbnails.remote)
+        record.speedLimit = row.int64("speed_limit").flatMap { $0 > 0 ? $0 : nil }
+        record.checksum = row.string("checksum").flatMap(Checksum.parse)
+        record.checksumVerified = row.bool("checksum_verified")
+        record.sizeVerified = row.bool("size_verified")
         return record
     }
 }

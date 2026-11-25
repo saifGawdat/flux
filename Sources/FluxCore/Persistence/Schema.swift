@@ -55,6 +55,13 @@ enum Schema {
             ALTER TABLE downloads ADD COLUMN group_index INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE downloads ADD COLUMN referer TEXT;
             """),
+        Migration(version: 5, name: "speed limits, checksums and mirrors", sql: """
+            ALTER TABLE downloads ADD COLUMN mirrors TEXT NOT NULL DEFAULT '[]';
+            ALTER TABLE downloads ADD COLUMN speed_limit INTEGER;
+            ALTER TABLE downloads ADD COLUMN checksum TEXT;
+            ALTER TABLE downloads ADD COLUMN checksum_verified INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE downloads ADD COLUMN size_verified INTEGER NOT NULL DEFAULT 0;
+            """),
     ]
 
     static var latestVersion: Int { migrations.last?.version ?? 0 }

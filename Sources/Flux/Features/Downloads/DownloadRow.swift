@@ -28,6 +28,7 @@ struct DownloadRow: View {
                     if record.priority != .normal, record.status != .completed {
                         PriorityBadge(priority: record.priority)
                     }
+                    if record.status == .completed { VerificationBadge(record: record) }
                 }
                 if record.status != .completed {
                     progress
@@ -76,7 +77,9 @@ struct DownloadRow: View {
             return item.detail ?? "Connecting to \(host)…"
         case .downloading:
             if let detail = item.detail, item.bytesPerSecond == 0 { return detail }
-            var parts = [amount, Format.speed(item.bytesPerSecond)]
+            var parts = [record.totalBytes == nil && record.kind == .file ? "\(amount) (size unknown)" : amount,
+                         Format.speed(item.bytesPerSecond)]
+            if let limit = record.speedLimit { parts[1] += " (limit \(Format.limit(limit)))" }
             if let eta = item.secondsRemaining { parts.append("\(Format.duration(eta)) left") }
             if item.activeConnections > 1 { parts.append("\(item.activeConnections) connections") }
             if let detail = item.detail { parts.append(detail) }
@@ -107,6 +110,11 @@ struct DownloadRow: View {
                 Button { model.resume([item.id]) } label: { Image(systemName: "play.circle.fill") }
                     .help("Resume")
             case .failed, .cancelled:
+                if canContinueFromNewLink {
+                    Button("Update Link…") { model.showInfo(item.id, editLink: true) }
+                        .font(.callout)
+                        .help("Continue this download from a fresh link")
+                }
                 Button { model.resume([item.id]) } label: { Image(systemName: "arrow.clockwise.circle.fill") }
                     .help("Retry")
             case .completed:
@@ -117,6 +125,39 @@ struct DownloadRow: View {
         .buttonStyle(.borderless)
         .font(.title2)
         .foregroundStyle(.secondary)
+    }
+}
+
+extension DownloadRow {
+    /// A failed file download with data worth keeping: a fresh link can pick it up.
+    var canContinueFromNewLink: Bool {
+        record.status == .failed && record.kind == .file && record.receivedBytes > 0 && record.supportsRanges
+    }
+}
+
+/// Seal on finished downloads: checksum verified or not, or the size matched the server's.
+struct VerificationBadge: View {
+    let record: DownloadRecord
+
+    var body: some View {
+        switch record.checksumState {
+        case .verified:
+            badge("checkmark.seal.fill", .green, "\(record.checksum!.algorithm.title) checksum verified")
+        case .mismatch:
+            badge("xmark.seal.fill", .red, "The file doesn't match the expected \(record.checksum!.algorithm.title) checksum")
+        case .none, .pending:
+            if record.sizeVerified, let total = record.totalBytes {
+                badge("checkmark.seal", .secondary, "Size matches what the server stated (\(Format.exactBytes(total)))")
+            }
+        }
+    }
+
+    private func badge(_ symbol: String, _ color: Color, _ help: String) -> some View {
+        Image(systemName: symbol)
+            .font(.caption)
+            .foregroundStyle(color)
+            .help(help)
+            .accessibilityLabel(help)
     }
 }
 

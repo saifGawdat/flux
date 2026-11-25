@@ -75,6 +75,15 @@ final class TestServer: Sendable {
     }
 
     func url(_ path: String) -> URL { URL(string: "http://127.0.0.1:\(port)/\(path)")! }
+
+    /// Paths of the GET requests the server has received so far.
+    var requests: [String] {
+        let text = (try? String(contentsOf: root.appendingPathComponent(".requests"), encoding: .utf8)) ?? ""
+        return text.split(separator: "\n").map { String($0.split(separator: " ").first ?? "") }
+    }
+
+    /// Makes `/expiring/…` links answer 403 from now on.
+    func expireLinks() throws { try Data().write(to: root.appendingPathComponent(".expired")) }
 }
 
 let fastOptions: DownloadJob.Options = {

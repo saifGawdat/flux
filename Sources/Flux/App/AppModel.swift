@@ -40,6 +40,13 @@ struct AddSheetRequest: Identifiable {
     var text: String
 }
 
+/// Opens the Info sheet for one download, optionally straight into changing its link.
+struct InfoSheetRequest: Identifiable {
+    let id = UUID()
+    var download: UUID
+    var editLink = false
+}
+
 /// Bridges the `DownloadManager` actor to SwiftUI. Holds no business logic: every user
 /// action becomes a manager intent, and all state flows back through manager events.
 @MainActor @Observable
@@ -58,6 +65,7 @@ final class AppModel {
     private(set) var mediaTools = MediaTools.none
     private(set) var toolVersions: [String: String] = [:]
     var addSheet: AddSheetRequest?
+    var infoSheet: InfoSheetRequest?
     var errorMessage: String?
 
     @ObservationIgnored private(set) var manager: DownloadManager?
@@ -170,6 +178,41 @@ final class AppModel {
     func members(of group: UUID) -> [DownloadItemModel] {
         downloads.filter { $0.record.group?.id == group }
     }
+
+    // MARK: Engine settings per download
+
+    func showInfo(_ id: UUID, editLink: Bool = false) {
+        infoSheet = InfoSheetRequest(download: id, editLink: editLink)
+    }
+
+    func setSpeedLimit(_ bytesPerSecond: Int64?, for ids: Set<UUID>) {
+        perform { await $0.setSpeedLimit(bytesPerSecond, for: ids) }
+    }
+
+    /// Continues a download from a new link (e.g. after the old one expired).
+    func updateLink(_ id: UUID, to url: URL) {
+        perform { try await $0.updateLink(id, to: url) }
+    }
+
+    func setMirrors(_ mirrors: [URL], for id: UUID) {
+        perform { try await $0.setMirrors(mirrors, for: id) }
+    }
+
+    /// For a finished download, checks the file now and returns whether it matches.
+    func setChecksum(_ checksum: Checksum?, for id: UUID) async throws -> Bool? {
+        guard let manager else { return nil }
+        return try await manager.setChecksum(checksum, for: id)
+    }
+
+    /// Global limit on or off, keeping the chosen amount.
+    func setGlobalSpeedLimit(enabled: Bool, amount: Int64? = nil) {
+        updateSettings {
+            $0.speedLimitEnabled = enabled
+            if let amount { $0.speedLimit = amount }
+        }
+    }
+
+    func toggleGlobalSpeedLimit() { setGlobalSpeedLimit(enabled: !settings.speedLimitEnabled) }
 
     func clearCompleted() {
         remove(Set(downloads.filter { $0.record.status == .completed }.map(\.id)), trashFiles: false)

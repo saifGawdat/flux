@@ -28,6 +28,11 @@ struct FluxApp: App {
                 Button("Retry Failed") { model.retryFailed() }
                     .disabled(model.failedCount == 0)
                 Divider()
+                Toggle("Limit Download Speed (\(Format.limit(model.settings.speedLimit)))", isOn: Binding(
+                    get: { model.settings.speedLimitEnabled },
+                    set: { model.setGlobalSpeedLimit(enabled: $0) }))
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                Divider()
                 Button("Clear Completed") { model.clearCompleted() }
             }
         }

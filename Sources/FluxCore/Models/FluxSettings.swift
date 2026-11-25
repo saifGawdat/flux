@@ -10,6 +10,19 @@ public struct FluxSettings: Codable, Sendable, Equatable {
     public var connectionsPerDownload: Int
     public var resumeOnLaunch: Bool
     public var defaultMediaFormat: MediaFormat
+    /// Global speed cap shared by all downloads, when `speedLimitEnabled`.
+    public var speedLimitEnabled: Bool
+    /// Bytes per second. Kept while the limit is off so turning it back on restores it.
+    public var speedLimit: Int64
+
+    /// The global limit in effect, in bytes per second; nil when unlimited.
+    public var effectiveSpeedLimit: Int64? { speedLimitEnabled ? speedLimit : nil }
+
+    /// Choices offered in menus (bytes per second). Decimal units, like the speeds Flux shows.
+    public static let speedLimitPresets: [Int64] = [
+        100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000,
+    ]
+    public static let minimumSpeedLimit: Int64 = 10_000
 
     public static var defaultDownloadDirectory: URL {
         FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
@@ -21,13 +34,17 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         maxConcurrentDownloads: Int = 3,
         connectionsPerDownload: Int = 8,
         resumeOnLaunch: Bool = true,
-        defaultMediaFormat: MediaFormat = .best
+        defaultMediaFormat: MediaFormat = .best,
+        speedLimitEnabled: Bool = false,
+        speedLimit: Int64 = 1_000_000
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConcurrentDownloads = maxConcurrentDownloads
         self.connectionsPerDownload = connectionsPerDownload
         self.resumeOnLaunch = resumeOnLaunch
         self.defaultMediaFormat = defaultMediaFormat
+        self.speedLimitEnabled = speedLimitEnabled
+        self.speedLimit = speedLimit
     }
 
     /// Tolerates missing keys so older stored settings keep working after upgrades.
@@ -39,6 +56,8 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         connectionsPerDownload = try c.decodeIfPresent(Int.self, forKey: .connectionsPerDownload) ?? defaults.connectionsPerDownload
         resumeOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .resumeOnLaunch) ?? defaults.resumeOnLaunch
         defaultMediaFormat = (try? c.decodeIfPresent(MediaFormat.self, forKey: .defaultMediaFormat)) ?? defaults.defaultMediaFormat
+        speedLimitEnabled = try c.decodeIfPresent(Bool.self, forKey: .speedLimitEnabled) ?? defaults.speedLimitEnabled
+        speedLimit = try c.decodeIfPresent(Int64.self, forKey: .speedLimit) ?? defaults.speedLimit
     }
 
     /// Clamps values into supported ranges.
@@ -46,6 +65,7 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         var s = self
         s.maxConcurrentDownloads = min(max(s.maxConcurrentDownloads, Self.concurrentRange.lowerBound), Self.concurrentRange.upperBound)
         s.connectionsPerDownload = min(max(s.connectionsPerDownload, 1), 32)
+        s.speedLimit = max(s.speedLimit, Self.minimumSpeedLimit)
         return s
     }
 }

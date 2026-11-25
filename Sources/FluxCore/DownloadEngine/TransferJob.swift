@@ -43,4 +43,7 @@ public protocol TransferJob: Actor {
     func cancel() async -> TransferSnapshot
     /// Stops for app termination without changing status; returns durable state.
     func suspendForShutdown() async -> DownloadRecord
+    /// Sets this download's own speed limit (nil = none) and re-reads the shared global
+    /// limit. Takes effect while running.
+    func setSpeedLimit(_ bytesPerSecond: Int64?) async
 }

@@ -71,6 +71,9 @@ struct DownloadsView: View {
         .sheet(item: $model.addSheet) { request in
             AddDownloadSheet(initialText: request.text)
         }
+        .sheet(item: $model.infoSheet) { request in
+            DownloadInfoSheet(request: request)
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -104,6 +107,12 @@ struct DownloadsView: View {
             Button { model.cancel(selection) } label: { Label("Cancel", systemImage: "xmark") }
                 .help("Cancel selected and delete partial data")
                 .disabled(!selected.contains { $0.record.status.canCancel })
+            Button {
+                if let id = selection.first { model.showInfo(id) }
+            } label: { Label("Info", systemImage: "info.circle") }
+                .help("Link, mirrors, checksum and speed limit (⌘I)")
+                .keyboardShortcut("i")
+                .disabled(selection.count != 1)
         }
     }
 
@@ -238,6 +247,10 @@ struct DownloadContextMenu: View {
                 Button("Open") { model.open(single) }.disabled(!single.fileExists)
             }
             Button("Show in Finder") { model.reveal(single) }
+            Button("Get Info") { model.showInfo(single.id) }
+            if single.record.status != .completed {
+                Button("Update Link…") { model.showInfo(single.id, editLink: true) }
+            }
             Divider()
         }
         if targets.contains(where: { $0.record.status.canResume }) {
@@ -249,12 +262,15 @@ struct DownloadContextMenu: View {
         if targets.contains(where: { $0.record.status.canCancel }) {
             Button("Cancel Download") { model.cancel(ids) }
         }
-        if targets.contains(where: { $0.record.status != .completed }) {
+        let unfinished = targets.filter { $0.record.status != .completed }
+        if !unfinished.isEmpty {
             Menu("Priority") {
                 ForEach(DownloadPriority.allCases.reversed(), id: \.self) { priority in
                     Button(priority.title) { model.setPriority(priority, for: ids) }
                 }
             }
+            let limits = Set(unfinished.map(\.record.speedLimit))
+            SpeedLimitMenu(ids: Set(unfinished.map(\.id)), current: limits.count == 1 ? limits.first : nil)
         }
         if targets.contains(where: { $0.record.status == .failed }), targets.count > 1 {
             Button("Retry Failed") { model.resume(Set(targets.filter { $0.record.status == .failed }.map(\.id))) }
@@ -280,9 +296,7 @@ struct StatusBar: View {
             }
             Button("Resume All") { model.resumeAll() }
             Button("Pause All") { model.pauseAll() }
-            Label(Format.speed(model.totalSpeed), systemImage: "arrow.down")
-                .monospacedDigit()
-                .frame(minWidth: 90, alignment: .trailing)
+            GlobalSpeedMenu()
         }
         .buttonStyle(.borderless)
         .font(.callout)
@@ -291,6 +305,42 @@ struct StatusBar: View {
         .padding(.vertical, 7)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// The total speed in the status bar; click it to set a limit for all downloads.
+struct GlobalSpeedMenu: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let limit = model.settings.effectiveSpeedLimit
+        Menu {
+            Toggle("No Limit", isOn: Binding(
+                get: { limit == nil },
+                set: { _ in model.setGlobalSpeedLimit(enabled: false) }))
+            Divider()
+            ForEach(FluxSettings.speedLimitPresets, id: \.self) { preset in
+                Toggle("Limit to \(Format.limit(preset))", isOn: Binding(
+                    get: { limit == preset },
+                    set: { _ in model.setGlobalSpeedLimit(enabled: true, amount: preset) }))
+            }
+            Divider()
+            SettingsLink { Text("Custom Limit…") }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: limit == nil ? "arrow.down" : "tortoise.fill")
+                Text(Format.speed(model.totalSpeed))
+                if let limit {
+                    Text("/ \(Format.limit(limit))").foregroundStyle(.tertiary)
+                }
+            }
+            .monospacedDigit()
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(minWidth: 90, alignment: .trailing)
+        .help(limit == nil ? "Total speed. Click to limit it." : "All downloads together are limited to \(Format.limit(limit))")
     }
 }
 
