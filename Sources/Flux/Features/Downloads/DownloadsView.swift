@@ -120,7 +120,7 @@ struct DownloadList: View {
             }
         }
         .listStyle(.inset)
-        .alternatingRowBackgrounds()
+        .fluxBackground()
         .overlay { if items.isEmpty { emptyState } }
         .contextMenu(forSelectionType: UUID.self) { ids in
             DownloadContextMenu(ids: ids)
@@ -145,7 +145,7 @@ struct DownloadList: View {
             ContentUnavailableView.search
         } else if emptyFilter == .all {
             ContentUnavailableView {
-                Label("No Downloads Yet", systemImage: "arrow.down.circle")
+                Label("No Downloads Yet", systemImage: "icloud.and.arrow.down")
             } description: {
                 Text("Add a link with ⌘N, or drag one onto this window.")
             } actions: {

@@ -58,7 +58,7 @@ struct DownloadRow: View {
 
     private var tint: Color {
         switch record.status {
-        case .downloading, .connecting: .accentColor
+        case .downloading, .connecting: FluxTheme.accent
         case .failed: .red
         case .paused: .orange
         default: .secondary

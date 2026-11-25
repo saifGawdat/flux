@@ -104,6 +104,7 @@ struct AddDownloadSheet: View {
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
             .task(id: previewURL) { await loadPreview() }
 
             HStack {
@@ -122,6 +123,8 @@ struct AddDownloadSheet: View {
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 540)
+        .background { SkyBackground() }
+        .tint(FluxTheme.accent)
     }
 }
 

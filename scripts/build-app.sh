@@ -14,6 +14,7 @@ BIN="$(swift build -c release --arch arm64 --show-bin-path)/Flux"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Flux"
+cp Resources/Brand/sky-halftone.jpg "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

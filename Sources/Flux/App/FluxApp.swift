@@ -10,6 +10,7 @@ struct FluxApp: App {
         Window("Flux", id: "main") {
             RootView()
                 .environment(model)
+                .tint(FluxTheme.accent)
                 .frame(minWidth: 720, minHeight: 440)
         }
         .defaultSize(width: 1000, height: 640)
@@ -32,6 +33,7 @@ struct FluxApp: App {
         Settings {
             SettingsView()
                 .environment(model)
+                .tint(FluxTheme.accent)
         }
     }
 }
@@ -45,12 +47,14 @@ struct RootView: View {
         case .loading:
             ProgressView("Opening Flux…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background { SkyBackground() }
         case .failed(let message):
             ContentUnavailableView {
                 Label("Flux couldn’t start", systemImage: "exclamationmark.triangle")
             } description: {
                 Text(message)
             }
+            .background { SkyBackground() }
         case .ready:
             DownloadsView()
         }

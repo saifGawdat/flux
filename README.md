@@ -69,6 +69,16 @@ Uses Swift Testing. Engine tests run against `scripts/range_server.py`, a local 
 server with Range/If-Range support, throttling and redirect/Content-Disposition modes —
 no public URLs are contacted.
 
+## Design
+
+Theme, palette and logo direction: [docs/BRAND.md](docs/BRAND.md). To preview the
+themed list without a screen recording permission:
+
+```sh
+FLUX_SNAPSHOT=/tmp/flux.png build/Flux.app/Contents/MacOS/Flux          # light
+FLUX_SNAPSHOT=/tmp/flux-dark.png FLUX_SNAPSHOT_DARK=1 build/Flux.app/Contents/MacOS/Flux
+```
+
 ## Data
 
 - Database: `~/Library/Application Support/Flux/flux.sqlite`

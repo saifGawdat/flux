@@ -54,6 +54,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .fluxBackground()
         .onAppear { model.refreshMediaTools() }
         .frame(width: 500)
         .fixedSize(horizontal: false, vertical: true)
