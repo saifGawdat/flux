@@ -4,10 +4,13 @@ import Foundation
 public struct MediaTools: Sendable, Equatable {
     public var ytdlp: URL?
     public var ffmpeg: URL?
+    /// Image galleries (Instagram, Reddit, Tumblr, Flickr, …).
+    public var galleryDL: URL?
 
-    public init(ytdlp: URL? = nil, ffmpeg: URL? = nil) {
+    public init(ytdlp: URL? = nil, ffmpeg: URL? = nil, galleryDL: URL? = nil) {
         self.ytdlp = ytdlp
         self.ffmpeg = ffmpeg
+        self.galleryDL = galleryDL
     }
 
     public static let none = MediaTools()
@@ -33,13 +36,13 @@ public struct MediaTools: Sendable, Equatable {
             dirs.lazy.map { $0.appendingPathComponent(name) }
                 .first { FileManager.default.isExecutableFile(atPath: $0.path) }
         }
-        return MediaTools(ytdlp: find("yt-dlp"), ffmpeg: find("ffmpeg"))
+        return MediaTools(ytdlp: find("yt-dlp"), ffmpeg: find("ffmpeg"), galleryDL: find("gallery-dl"))
     }
 
     /// Environment for child processes: PATH includes the tool folders so yt-dlp finds ffmpeg.
     func processEnvironment(base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
         var env = base
-        var dirs = [ytdlp, ffmpeg].compactMap { $0?.deletingLastPathComponent().path }
+        var dirs = [ytdlp, ffmpeg, galleryDL].compactMap { $0?.deletingLastPathComponent().path }
         dirs += ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
         if let existing = base["PATH"] { dirs.append(existing) }
         env["PATH"] = dirs.joined(separator: ":")
@@ -78,12 +81,18 @@ public enum MediaRouting {
     static let directFileExtensions: Set<String> = [
         "zip", "rar", "7z", "gz", "tgz", "xz", "dmg", "pkg", "iso", "exe", "msi", "pdf",
         "mp4", "mkv", "mov", "webm", "mp3", "m4a", "flac", "wav", "jpg", "jpeg", "png", "gif",
+        "webp", "avif", "heic", "bmp", "tif", "tiff", "svg",
     ]
+
+    /// The link names a file (by extension) rather than a page.
+    public static func isDirectFile(_ url: URL) -> Bool {
+        directFileExtensions.contains(url.pathExtension.lowercased())
+    }
 
     /// True for pages on well-known video/audio sites (but not direct file links on them).
     public static func prefersMedia(_ url: URL) -> Bool {
         guard let host = url.host()?.lowercased() else { return false }
         let isMediaHost = mediaHosts.contains { host == $0 || host.hasSuffix("." + $0) }
-        return isMediaHost && !directFileExtensions.contains(url.pathExtension.lowercased())
+        return isMediaHost && !isDirectFile(url)
     }
 }

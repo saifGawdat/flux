@@ -25,6 +25,8 @@ struct FluxApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .option])
                 Button("Pause All") { model.pauseAll() }
                     .keyboardShortcut("p", modifiers: [.command, .option])
+                Button("Retry Failed") { model.retryFailed() }
+                    .disabled(model.failedCount == 0)
                 Divider()
                 Button("Clear Completed") { model.clearCompleted() }
             }

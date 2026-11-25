@@ -16,6 +16,20 @@ func makeFakeYTDLP() throws -> URL {
     open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-args.txt"), "w").write("\n".join(args))
     url = args[-1]
     key = url.rsplit("=", 1)[-1].rsplit("/", 1)[-1]
+    if "-J" in args and "--yes-playlist" in args and ("list=" in url or key == "channel"):
+        if key == "channel":
+            print('{"_type": "playlist", "title": "Fake Channel", "entries": ['
+                  '{"_type": "url", "ie_key": "YoutubeTab", "id": "PLinner", "url": "https://www.youtube.com/playlist?list=PLinner", "title": "Inner"},'
+                  '{"_type": "url", "ie_key": "Youtube", "id": "vid00000003", "url": "https://www.youtube.com/watch?v=vid00000003", "title": "Loose video"}]}')
+            sys.exit(0)
+        print('{"_type": "playlist", "title": "Fake Playlist", "uploader": "Fake Channel", "playlist_count": 4, "entries": ['
+              '{"_type": "url", "ie_key": "Youtube", "id": "vid00000001", "url": "https://www.youtube.com/watch?v=vid00000001", "title": "First", "duration": 60,'
+              ' "thumbnails": [{"url": "https://i.ytimg.com/vi/vid00000001/small.jpg", "width": 168}, {"url": "https://i.ytimg.com/vi/vid00000001/hq.jpg", "width": 480}]},'
+              '{"_type": "url", "ie_key": "Youtube", "id": "vid00000002", "url": "https://www.youtube.com/watch?v=vid00000002", "title": "[Private video]"},'
+              '{"_type": "url", "ie_key": "Youtube", "id": "vid00000003", "title": "Only an ID", "duration": 30},'
+              '{"_type": "url", "ie_key": "Youtube", "id": "vid00000001", "url": "https://www.youtube.com/watch?v=vid00000001", "title": "First again"},'
+              '{"_type": "url", "ie_key": "Youtube", "id": "vid00000004", "url": "https://www.youtube.com/watch?v=vid00000004", "title": null, "duration": null}]}')
+        sys.exit(0)
     if "-J" in args:
         if key == "fail":
             print("ERROR: [youtube] abc123: Private video. Sign in if you've been granted access", file=sys.stderr)
@@ -29,12 +43,13 @@ func makeFakeYTDLP() throws -> URL {
     if "--load-info-json" in args:
         sel = args[args.index("-f") + 1]
         if "height<=1080" in sel: print("v1080+a|1920x1080|mp4|1080")
-        elif "height<=720" in sel: print("v360+a|640x360|mp4|360")
+        elif "height<=720" in sel or "height<=480" in sel: print("v360+a|640x360|mp4|360")
         elif sel.startswith("ba"): print("a|audio only|webm|NA")
         else: print("v2160+a|3840x2160|webm|2160")
         sys.exit(0)
     workdir = args[args.index("-P") + 1]
     print("FLUXTITLE|Fake Video: Part 1", flush=True)
+    print("FLUXTHUMB|https://img.example.com/fake/maxres.webp", flush=True)
     if key == "fail":
         print("ERROR: [youtube] abc123: Video unavailable", file=sys.stderr, flush=True)
         sys.exit(1)
@@ -91,9 +106,34 @@ struct MediaParsingTests {
     @Test func parsesMarkersAndErrors() {
         #expect(MediaOutput.parse("FLUXTITLE|A | B") == .title("A | B"))
         #expect(MediaOutput.parse("FLUXFILE|/tmp/x.mp4") == .finalFile("/tmp/x.mp4"))
+        #expect(MediaOutput.parse("FLUXTHUMB|https://i.ytimg.com/vi/x/a.jpg") == .thumbnail(URL(string: "https://i.ytimg.com/vi/x/a.jpg")!))
+        #expect(MediaOutput.parse("FLUXTHUMB|NA") == .other)
+        #expect(MediaOutput.parse("FLUXTHUMB|file:///etc/passwd") == .other)
         #expect(MediaOutput.parse("ERROR: boom") == .error("boom"))
         #expect(MediaOutput.parse(#"[Merger] Merging formats into "x.mp4""#) == .postProcessing("Merging video and audio…"))
         #expect(MediaOutput.parse("[youtube] abc: Downloading webpage") == .other)
+    }
+
+    @Test(arguments: [
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10", "dQw4w9WgXcQ"),
+        ("https://youtu.be/dQw4w9WgXcQ?si=abc", "dQw4w9WgXcQ"),
+        ("https://m.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://music.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+        ("https://www.youtube.com/watch?v=short", nil),
+        ("https://www.youtube.com/watch?v=dQw4w9WgX%2F", nil),
+        ("https://vimeo.com/123456", nil),
+        ("https://notyoutube.com/watch?v=dQw4w9WgXcQ", nil),
+    ] as [(String, String?)])
+    func youTubeThumbnailFromLink(link: String, id: String?) {
+        #expect(Thumbnails.youTube(for: URL(string: link)!) == id.map { URL(string: "https://i.ytimg.com/vi/\($0)/mqdefault.jpg")! })
+    }
+
+    @Test func previewURLsPreferYouTubeThenExtractor() {
+        var record = DownloadRecord(url: URL(string: "https://youtu.be/dQw4w9WgXcQ")!, directory: URL(fileURLWithPath: "/tmp"), kind: .media)
+        record.thumbnailURL = URL(string: "https://i.ytimg.com/vi_webp/dQw4w9WgXcQ/maxresdefault.webp")
+        #expect(record.previewImageURLs.map(\.lastPathComponent) == ["mqdefault.jpg", "maxresdefault.webp"])
+        record.kind = .file
+        #expect(record.previewImageURLs.map(\.lastPathComponent) == ["maxresdefault.webp"])
     }
 
     @Test func lineBufferHandlesSplitsAndCarriageReturns() {
@@ -107,6 +147,7 @@ struct MediaParsingTests {
         #expect(MediaJob.friendly("[youtube] abc: Private video. Sign in if you've been granted access") == "This video is private.")
         #expect(MediaJob.friendly("Unsupported URL: https://example.com") == "No downloadable media found on this page.")
         #expect(MediaJob.friendly("[generic] xyz: Something odd") == "Something odd")
+        #expect(MediaJob.friendly("[twitter] 123: No video could be found in this tweet")?.contains("choose Images") == true)
     }
 
     @Test func formatArgumentsDependOnFFmpeg() {
@@ -212,6 +253,7 @@ struct MediaJobTests {
 
         #expect(record.status == .completed, "\(record.errorMessage ?? "")")
         #expect(record.title == "Fake Video: Part 1")
+        #expect(record.thumbnailURL == URL(string: "https://img.example.com/fake/maxres.webp"))
         #expect(record.totalBytes == 2_000_000)
         let final = try #require(record.finalPath)
         #expect(final.deletingLastPathComponent().standardizedFileURL == out.standardizedFileURL)
@@ -365,9 +407,9 @@ struct MigrationUpgradeTests {
                 """)
         }
         let db = try FluxDatabase(url: url)
-        #expect(try await db.schemaVersion() == 2)
+        #expect(try await db.schemaVersion() == Schema.latestVersion)
         let record = try #require(try await db.loadDownloads().first)
-        #expect(record.kind == .file && record.mediaFormat == nil)
+        #expect(record.kind == .file && record.mediaFormat == nil && record.thumbnailURL == nil)
     }
 }
 

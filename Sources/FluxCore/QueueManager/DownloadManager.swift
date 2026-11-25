@@ -31,6 +31,14 @@ public actor DownloadManager {
         public var kind: DownloadKind?
         /// nil = use the default from settings.
         public var mediaFormat: MediaFormat?
+        /// Known title (e.g. from a playlist listing), shown until the extractor reports one.
+        public var title: String?
+        public var thumbnailURL: URL?
+        /// Sent as `Referer` (images found on a page).
+        public var referer: URL?
+        /// Playlist or gallery this download belongs to, and its position there.
+        public var group: DownloadGroup?
+        public var groupIndex: Int
 
         public init(
             url: URL,
@@ -40,7 +48,12 @@ public actor DownloadManager {
             priority: DownloadPriority = .normal,
             startImmediately: Bool = true,
             kind: DownloadKind? = nil,
-            mediaFormat: MediaFormat? = nil
+            mediaFormat: MediaFormat? = nil,
+            title: String? = nil,
+            thumbnailURL: URL? = nil,
+            referer: URL? = nil,
+            group: DownloadGroup? = nil,
+            groupIndex: Int = 0
         ) {
             self.url = url
             self.directory = directory
@@ -50,6 +63,11 @@ public actor DownloadManager {
             self.startImmediately = startImmediately
             self.kind = kind
             self.mediaFormat = mediaFormat
+            self.title = title
+            self.thumbnailURL = thumbnailURL
+            self.referer = referer
+            self.group = group
+            self.groupIndex = groupIndex
         }
     }
 
@@ -112,7 +130,7 @@ public actor DownloadManager {
     public func item(_ id: UUID) -> Item? { items[id] }
 
     private var orderedItems: [Item] {
-        items.values.sorted { $0.record.createdAt > $1.record.createdAt }
+        items.values.sorted { DownloadRecord.listOrder($0.record, $1.record) }
     }
 
     private func unsubscribe(_ key: UUID) { subscribers[key] = nil }
@@ -133,25 +151,39 @@ public actor DownloadManager {
         for request in requests where !LinkExtractor.isDownloadable(request.url) {
             throw FluxError.unsupportedURL(request.url.absoluteString)
         }
-        var ids: [UUID] = []
+        // One timestamp for the batch: a playlist keeps its order in the list and queue.
+        let now = Date()
+        var records: [DownloadRecord] = []
         for request in requests {
+            let kind = request.kind ?? (MediaRouting.prefersMedia(request.url) ? .media : .file)
             var record = DownloadRecord(
                 url: request.url,
                 directory: request.directory ?? settings.downloadDirectory,
                 fileName: request.fileName,
                 maxConnections: request.connections ?? settings.connectionsPerDownload,
                 priority: request.priority,
-                kind: request.kind ?? (MediaRouting.prefersMedia(request.url) ? .media : .file),
-                mediaFormat: request.mediaFormat ?? settings.defaultMediaFormat)
+                kind: kind,
+                mediaFormat: request.mediaFormat ?? settings.defaultMediaFormat,
+                createdAt: request.group == nil ? Date() : now)
             record.status = request.startImmediately ? .queued : .paused
-            try await database.save(record)
+            if let title = request.title, !title.isEmpty {
+                record.title = title
+                if kind == .media, request.fileName == nil { record.fileName = FileNaming.sanitize(title) }
+            }
+            record.thumbnailURL = request.thumbnailURL.flatMap { Thumbnails.remote($0.absoluteString) }
+            record.referer = request.referer
+            record.group = request.group
+            record.groupIndex = request.groupIndex
+            records.append(record)
+        }
+        try await database.save(records)
+        for record in records {
             let item = Item(record: record, bytesPerSecond: 0, activeConnections: 0, detail: nil)
             items[record.id] = item
             broadcast(.updated(item))
-            ids.append(record.id)
         }
         await schedule()
-        return ids
+        return records.map(\.id)
     }
 
     public func pause(_ ids: some Collection<UUID>) async throws {
@@ -270,10 +302,7 @@ public actor DownloadManager {
         guard running < settings.maxConcurrentDownloads else { return }
         let candidates = items.values
             .filter { $0.record.status == .queued }
-            .sorted {
-                if $0.record.priority != $1.record.priority { return $0.record.priority > $1.record.priority }
-                return $0.record.createdAt < $1.record.createdAt
-            }
+            .sorted { DownloadRecord.queueOrder($0.record, $1.record) }
         for candidate in candidates where running < settings.maxConcurrentDownloads {
             let id = candidate.id
             guard items[id]?.record.status == .queued else { continue }

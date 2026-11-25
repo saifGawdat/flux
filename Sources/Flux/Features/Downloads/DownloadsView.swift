@@ -39,10 +39,7 @@ struct DownloadsView: View {
     private var visible: [DownloadItemModel] {
         let filter = filter ?? .all
         return model.downloads.filter { item in
-            filter.matches(item.record.status)
-                && (search.isEmpty
-                    || item.record.fileName.localizedCaseInsensitiveContains(search)
-                    || item.record.url.absoluteString.localizedCaseInsensitiveContains(search))
+            filter.matches(item.record.status) && (search.isEmpty || item.record.matches(search))
         }
     }
 
@@ -67,6 +64,10 @@ struct DownloadsView: View {
         }
         .searchable(text: $search, placement: .toolbar, prompt: "Search downloads")
         .toolbar { toolbar }
+        // In full screen macOS hosts the toolbar in its own strip with an opaque backdrop
+        // that covers the top of the floating sidebar. Hide it so the sidebar and sky run
+        // up under the toolbar, as they do in a normal window.
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .sheet(item: $model.addSheet) { request in
             AddDownloadSheet(initialText: request.text)
         }
@@ -84,9 +85,16 @@ struct DownloadsView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
+        // The main action stands on its own, in Flux Blue.
+        ToolbarItem(placement: .primaryAction) {
             Button { model.presentAddSheet() } label: { Label("Add", systemImage: "plus") }
                 .help("Add download (⌘N)")
+                .prominentToolbarStyle()
+        }
+        if #available(macOS 26, *) {
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+        }
+        ToolbarItemGroup(placement: .primaryAction) {
             Button { model.resume(selection) } label: { Label("Resume", systemImage: "play.fill") }
                 .help("Resume or retry selected")
                 .disabled(!selected.contains { $0.record.status.canResume })
@@ -112,18 +120,74 @@ struct DownloadList: View {
     @Binding var selection: Set<UUID>
     let emptyFilter: StatusFilter
     let isSearching: Bool
+    /// Groups the user opened or closed (big groups start closed, small ones open).
+    @State private var toggledGroups: Set<UUID> = []
+
+    private enum Row: Identifiable {
+        case header(DownloadGroup, members: [DownloadItemModel])
+        case item(DownloadItemModel, inGroup: Bool)
+
+        var id: String {
+            switch self {
+            case .header(let group, _): "group-" + group.id.uuidString
+            case .item(let item, _): item.id.uuidString
+            }
+        }
+    }
+
+    static let collapseAbove = 12
+
+    private func isCollapsed(_ group: DownloadGroup, count: Int) -> Bool {
+        // While filtering or searching, show the matches instead of hiding them.
+        guard emptyFilter == .all, !isSearching else { return false }
+        return (count > Self.collapseAbove) != toggledGroups.contains(group.id)
+    }
+
+    /// Consecutive downloads of one playlist/gallery get a header; members follow it.
+    private var rows: [Row] {
+        var rows: [Row] = []
+        var index = 0
+        while index < items.count {
+            let item = items[index]
+            guard let group = item.record.group else {
+                rows.append(.item(item, inGroup: false))
+                index += 1
+                continue
+            }
+            var end = index
+            while end < items.count, items[end].record.group?.id == group.id { end += 1 }
+            let members = model.members(of: group.id)
+            rows.append(.header(group, members: members))
+            if !isCollapsed(group, count: members.count) {
+                rows += items[index..<end].map { .item($0, inGroup: true) }
+            }
+            index = end
+        }
+        return rows
+    }
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(items) { item in
-                DownloadRow(item: item).tag(item.id)
+            ForEach(rows) { row in
+                switch row {
+                case .header(let group, let members):
+                    GroupHeaderRow(
+                        group: group, members: members,
+                        isCollapsed: isCollapsed(group, count: members.count),
+                        onToggle: { toggledGroups.formSymmetricDifference([group.id]) },
+                        onSelect: { selection = Set(members.map(\.id)) })
+                case .item(let item, let inGroup):
+                    DownloadRow(item: item)
+                        .padding(.leading, inGroup ? 22 : 0)
+                        .tag(item.id)
+                }
             }
         }
         .listStyle(.inset)
         .fluxBackground()
         .overlay { if items.isEmpty { emptyState } }
         .contextMenu(forSelectionType: UUID.self) { ids in
-            DownloadContextMenu(ids: ids)
+            if !ids.isEmpty { DownloadContextMenu(ids: ids) }
         } primaryAction: { ids in
             for id in ids {
                 guard let item = model.item(id) else { continue }
@@ -134,7 +198,12 @@ struct DownloadList: View {
         .dropDestination(for: URL.self) { urls, _ in
             let links = urls.filter(LinkExtractor.isDownloadable)
             guard !links.isEmpty else { return false }
-            model.add(links)
+            // A single page might be a playlist or hold images: let the add sheet show the choices.
+            if links.count == 1, let link = links.first, LinkInspector.shouldInspect(link) {
+                model.presentAddSheet(prefill: link.absoluteString)
+            } else {
+                model.add(links)
+            }
             return true
         }
     }
@@ -187,6 +256,9 @@ struct DownloadContextMenu: View {
                 }
             }
         }
+        if targets.contains(where: { $0.record.status == .failed }), targets.count > 1 {
+            Button("Retry Failed") { model.resume(Set(targets.filter { $0.record.status == .failed }.map(\.id))) }
+        }
         Button(targets.count == 1 ? "Copy Link" : "Copy Links") { model.copyLinks(ids) }
         Divider()
         Button("Remove from List") { model.remove(ids, trashFiles: false) }
@@ -203,6 +275,9 @@ struct StatusBar: View {
         HStack(spacing: 14) {
             Text("\(model.activeCount) active · \(model.queuedCount) queued")
             Spacer()
+            if model.failedCount > 0 {
+                Button("Retry Failed (\(model.failedCount))") { model.retryFailed() }
+            }
             Button("Resume All") { model.resumeAll() }
             Button("Pause All") { model.pauseAll() }
             Label(Format.speed(model.totalSpeed), systemImage: "arrow.down")
@@ -216,5 +291,17 @@ struct StatusBar: View {
         .padding(.vertical, 7)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+private extension View {
+    /// Tinted glass on macOS 26, a filled accent button before that.
+    @ViewBuilder
+    func prominentToolbarStyle() -> some View {
+        if #available(macOS 26, *) {
+            buttonStyle(.glassProminent).tint(FluxTheme.accent)
+        } else {
+            buttonStyle(.borderedProminent).tint(FluxTheme.accent)
+        }
     }
 }

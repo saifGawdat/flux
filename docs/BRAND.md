@@ -29,7 +29,29 @@ Defined in code in `Sources/Flux/Theme/FluxTheme.swift`; never hard-code these e
   translucent areas.
 - Empty states use cloud SF Symbols (`icloud.and.arrow.down`).
 
-## Logo direction (to design)
+## Logo
+
+![Flux app icon](../Resources/Brand/AppIcon-1024.png)
+
+An **F assembled from download chunks** on the halftone sky. Each rounded square is one
+piece of a file arriving over its own connection, the way Flux's multi-connection engine
+splits a download. The last chunk, at the foot of the stem, is still filling from the top
+down: a download in progress, moving downward.
+
+- **Background:** the sky image at 1:1 (no resampling, so the halftone dots stay crisp),
+  open sky at the top and cumulus rising from the bottom. A multiply veil in Flux Blue
+  deepens the centre so the Cloud White F reads clearly.
+- **Mark:** a 3 × 5 grid of Cloud White chunks with a soft ink shadow. It's nudged right
+  of centre so it looks centred.
+- **Small sizes (≤ 32 px):** flat Sky → Flux Blue gradient, no halftone, with tighter
+  gaps (requirement 3 below).
+- **Source of truth:** `scripts/make-icon.swift` generates `Resources/Brand/AppIcon-1024.png`
+  and `Resources/Brand/Flux.icns`, which `build-app.sh` bundles. Edit the script, not the PNGs.
+
+Still to do: a monochrome menu bar glyph (the chunked F as a template image) and the
+"Flux" wordmark.
+
+### Original requirements
 
 Requirements:
 1. Built from the halftone sky: a cloud silhouette rendered in Flux Blue halftone dots

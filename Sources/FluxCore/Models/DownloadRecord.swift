@@ -44,6 +44,23 @@ public struct Segment: Codable, Sendable, Equatable {
     public var isComplete: Bool { remaining == 0 }
 }
 
+/// Downloads added together from one playlist, image gallery or web page.
+public struct DownloadGroup: Codable, Sendable, Equatable, Hashable {
+    public enum Kind: String, Codable, Sendable {
+        case playlist, images
+    }
+
+    public var id: UUID
+    public var title: String
+    public var kind: Kind
+
+    public init(id: UUID = UUID(), title: String, kind: Kind) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+    }
+}
+
 public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     public let id: UUID
     public var url: URL
@@ -69,6 +86,14 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     public var mediaFormat: MediaFormat?
     /// Human title reported by the media extractor.
     public var title: String?
+    /// Preview image reported by the media extractor (video thumbnail, cover art).
+    public var thumbnailURL: URL?
+    /// The playlist or gallery this download came from, if any.
+    public var group: DownloadGroup?
+    /// Position within `group` (playlist order).
+    public var groupIndex: Int = 0
+    /// Page the link was found on; sent as `Referer`, which some image hosts require.
+    public var referer: URL?
 
     public init(
         id: UUID = UUID(),
@@ -99,6 +124,29 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
 
     public var receivedBytes: Int64 { segments.reduce(0) { $0 + $1.received } }
 
+    /// What to show as the name: the media title once known, else the file name.
+    public var displayName: String { kind == .media ? (title ?? fileName) : fileName }
+
+    /// Search: name, media title, playlist/gallery title or link.
+    public func matches(_ query: String) -> Bool {
+        [fileName, title ?? "", group?.title ?? "", url.absoluteString].contains { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    /// List order: newest first; downloads of one group stay in playlist order.
+    public static func listOrder(_ a: Self, _ b: Self) -> Bool {
+        if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
+        if a.groupIndex != b.groupIndex { return a.groupIndex < b.groupIndex }
+        return a.id.uuidString < b.id.uuidString
+    }
+
+    /// Queue order: higher priority first, then oldest first, then playlist order.
+    public static func queueOrder(_ a: Self, _ b: Self) -> Bool {
+        if a.priority != b.priority { return a.priority > b.priority }
+        if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
+        if a.groupIndex != b.groupIndex { return a.groupIndex < b.groupIndex }
+        return a.id.uuidString < b.id.uuidString
+    }
+
     public var fractionCompleted: Double? {
         if status == .completed { return 1 }
         guard let total = totalBytes, total > 0 else { return nil }
@@ -108,4 +156,42 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     public var partFileURL: URL? { partFileName.map { directory.appendingPathComponent($0) } }
 
     public var sourceHost: String { url.host() ?? url.absoluteString }
+
+    /// Remote preview images to try, best first. YouTube links get a thumbnail straight
+    /// from the video ID, so it shows before yt-dlp has even started.
+    public var previewImageURLs: [URL] {
+        var urls: [URL] = []
+        if kind == .media, let youTube = Thumbnails.youTube(for: url) { urls.append(youTube) }
+        if let thumbnailURL, !urls.contains(thumbnailURL) { urls.append(thumbnailURL) }
+        return urls
+    }
+}
+
+public enum Thumbnails {
+    /// 320 × 180 (16:9, no letterbox bars); exists for every public YouTube video.
+    public static func youTube(for url: URL) -> URL? {
+        guard let host = url.host()?.lowercased() else { return nil }
+        var id: String?
+        if host == "youtu.be" {
+            id = url.pathComponents.dropFirst().first
+        } else if host == "youtube.com" || host.hasSuffix(".youtube.com") {
+            let parts = url.pathComponents
+            if parts.count >= 3, ["shorts", "live", "embed", "v"].contains(parts[1]) {
+                id = parts[2]
+            } else {
+                id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "v" }?.value
+            }
+        }
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+        guard let id, id.count == 11, id.allSatisfy(allowed.contains) else { return nil }
+        return URL(string: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg")
+    }
+
+    /// Accepts only web URLs from extractor output ("NA" and local paths are ignored).
+    static func remote(_ text: String) -> URL? {
+        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http", url.host() != nil else { return nil }
+        return url
+    }
 }

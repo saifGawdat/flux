@@ -45,6 +45,16 @@ enum Schema {
             ALTER TABLE downloads ADD COLUMN media_format TEXT;
             ALTER TABLE downloads ADD COLUMN title TEXT;
             """),
+        Migration(version: 3, name: "thumbnails", sql: """
+            ALTER TABLE downloads ADD COLUMN thumbnail_url TEXT;
+            """),
+        Migration(version: 4, name: "playlists and image groups", sql: """
+            ALTER TABLE downloads ADD COLUMN group_id TEXT;
+            ALTER TABLE downloads ADD COLUMN group_title TEXT;
+            ALTER TABLE downloads ADD COLUMN group_kind TEXT;
+            ALTER TABLE downloads ADD COLUMN group_index INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE downloads ADD COLUMN referer TEXT;
+            """),
     ]
 
     static var latestVersion: Int { migrations.last?.version ?? 0 }

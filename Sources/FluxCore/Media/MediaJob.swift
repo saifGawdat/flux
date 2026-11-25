@@ -167,6 +167,7 @@ public actor MediaJob: TransferJob {
             "-o", outputName,
             "--progress-template", MediaOutput.progressTemplate,
             "--print", MediaOutput.titleTemplate,
+            "--print", MediaOutput.thumbnailTemplate,
             "--print", MediaOutput.fileTemplate,
         ]
         args += (record.mediaFormat ?? .best).ytdlpArguments(hasFFmpeg: tools.ffmpeg != nil)
@@ -235,6 +236,11 @@ public actor MediaJob: TransferJob {
             record.title = title
             if !record.userNamedFile, record.finalPath == nil {
                 record.fileName = FileNaming.sanitize(title)
+            }
+        case .thumbnail(let url):
+            if record.thumbnailURL != url {
+                record.thumbnailURL = url
+                emit(checkpoint: true)
             }
         case .progress(let p):
             if p.formatID != formatID {
@@ -324,6 +330,9 @@ public actor MediaJob: TransferJob {
         guard let message else { return nil }
         let lower = message.lowercased()
         if lower.contains("unsupported url") { return "No downloadable media found on this page." }
+        if lower.contains("no video") || lower.contains("there is no video") {
+            return "No video in this post. To save its images, add the link on its own and choose Images."
+        }
         if lower.contains("private video") { return "This video is private." }
         if lower.contains("sign in to confirm your age") { return "This video is age-restricted and needs a signed-in account." }
         if lower.contains("video unavailable") { return "This video is unavailable." }

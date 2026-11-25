@@ -195,6 +195,7 @@ public actor DownloadJob: TransferJob {
         guard let session else { return }
         var request = URLRequest(url: resolvedURL ?? record.url)
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        if let referer = record.referer { request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
         if index < 0 {
             request.setValue("bytes=0-", forHTTPHeaderField: "Range")
         } else {

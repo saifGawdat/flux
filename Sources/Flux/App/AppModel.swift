@@ -72,7 +72,9 @@ final class AppModel {
         guard !didLaunch else { return }
         didLaunch = true
         do {
-            let database = try FluxDatabase(url: FluxDatabase.defaultURL)
+            // Developer aid: FLUX_DATABASE runs a throwaway instance beside the real one.
+            let override = ProcessInfo.processInfo.environment["FLUX_DATABASE"].map { URL(fileURLWithPath: $0) }
+            let database = try FluxDatabase(url: override ?? FluxDatabase.defaultURL)
             let manager = try await DownloadManager(database: database)
             self.manager = manager
             let events = await manager.events()
@@ -99,7 +101,7 @@ final class AppModel {
             } else {
                 let model = DownloadItemModel(item)
                 index[item.id] = model
-                let position = downloads.firstIndex { $0.record.createdAt < item.record.createdAt } ?? downloads.endIndex
+                let position = downloads.firstIndex { DownloadRecord.listOrder(item.record, $0.record) } ?? downloads.endIndex
                 downloads.insert(model, at: position)
             }
         case .removed(let ids):
@@ -148,6 +150,12 @@ final class AppModel {
         perform { try await $0.add(requests) }
     }
 
+    /// Adds prepared downloads (a playlist's videos, a gallery's images).
+    func add(_ requests: [DownloadManager.NewDownload]) {
+        guard !requests.isEmpty else { return }
+        perform { try await $0.add(requests) }
+    }
+
     func pause(_ ids: Set<UUID>) { perform { try await $0.pause(ids) } }
     func resume(_ ids: Set<UUID>) { perform { try await $0.resume(ids) } }
     func cancel(_ ids: Set<UUID>) { perform { try await $0.cancel(ids) } }
@@ -155,6 +163,13 @@ final class AppModel {
     func setPriority(_ priority: DownloadPriority, for ids: Set<UUID>) { perform { await $0.setPriority(priority, for: ids) } }
     func pauseAll() { pause(Set(downloads.filter { $0.record.status.canPause }.map(\.id))) }
     func resumeAll() { resume(Set(downloads.filter { $0.record.status == .paused }.map(\.id))) }
+    func retryFailed() { resume(Set(downloads.filter { $0.record.status == .failed }.map(\.id))) }
+    var failedCount: Int { downloads.lazy.filter { $0.record.status == .failed }.count }
+
+    /// Downloads that belong to one playlist or gallery, in playlist order.
+    func members(of group: UUID) -> [DownloadItemModel] {
+        downloads.filter { $0.record.group?.id == group }
+    }
 
     func clearCompleted() {
         remove(Set(downloads.filter { $0.record.status == .completed }.map(\.id)), trashFiles: false)
@@ -183,18 +198,18 @@ final class AppModel {
         let tools = await manager.mediaTools
         mediaTools = tools
         var versions: [String: String] = [:]
-        for case let tool? in [tools.ytdlp, tools.ffmpeg] {
+        for case let tool? in [tools.ytdlp, tools.ffmpeg, tools.galleryDL] {
             versions[tool.lastPathComponent] = await MediaTools.version(of: tool)
         }
         toolVersions = versions
     }
 
-    /// Fetches what each format would download for one link (title, resolution, size).
-    func mediaPreview(for url: URL) async throws -> MediaPreview {
-        try await MediaProbe.preview(of: url, tools: mediaTools)
+    /// Finds what's behind one link: a video (with sizes per format), a playlist, images.
+    func inspect(_ url: URL) async -> LinkInspection {
+        await LinkInspector.inspect(url, tools: mediaTools)
     }
 
-    static let installCommand = "brew install yt-dlp ffmpeg"
+    static let installCommand = "brew install yt-dlp ffmpeg gallery-dl"
 
     func copyInstallCommand() {
         NSPasteboard.general.clearContents()
@@ -226,6 +241,12 @@ final class AppModel {
             NSWorkspace.shared.activateFileViewerSelecting([part])
         } else {
             NSWorkspace.shared.open(item.record.directory)
+        }
+    }
+
+    func revealFolder(_ url: URL) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
 

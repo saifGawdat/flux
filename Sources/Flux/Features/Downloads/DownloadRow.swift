@@ -11,12 +11,11 @@ struct DownloadRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            FileIcon(item: item)
-                .frame(width: 34, height: 34)
+            DownloadThumbnail(item: item)
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text(record.fileName)
+                    Text(record.displayName)
                         .font(.body.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -156,23 +155,5 @@ struct SegmentBar: View {
         .accessibilityElement()
         .accessibilityLabel("Download progress")
         .accessibilityValue("\(Int((record.fractionCompleted ?? 0) * 100)) percent")
-    }
-}
-
-struct FileIcon: View {
-    let item: DownloadItemModel
-
-    var body: some View {
-        Image(nsImage: icon)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-    }
-
-    private var icon: NSImage {
-        if item.record.status == .completed, let path = item.record.finalPath, item.fileExists {
-            return NSWorkspace.shared.icon(forFile: path.path)
-        }
-        let ext = (item.record.fileName as NSString).pathExtension
-        return NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
     }
 }

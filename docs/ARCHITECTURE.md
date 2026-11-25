@@ -96,3 +96,19 @@ conversion) as an external, user-installed tool:
   an option.
 - Links are routed by host; any "file" link that answers with `text/html` is retried
   through yt-dlp, so pages from unknown sites work too.
+
+### D9 — Playlists and galleries become groups of ordinary downloads
+A playlist or gallery is not a new kind of job. The add sheet asks `LinkInspector` what
+a link holds — yt-dlp (`-J --flat-playlist`, one fast request), gallery-dl (`-j`, metadata
+only) and, for sites gallery-dl doesn't know, `PageImageScanner` reading the HTML — and
+turns the user's picks into normal downloads that share a `DownloadGroup` (id, title,
+kind) and a `groupIndex`:
+- Videos are media downloads (one yt-dlp run each, `--no-playlist`), so pause, resume,
+  retry, priority and the concurrency limit work per video with no new code paths.
+- Images are file downloads through Flux's own engine, carrying the page as `Referer`
+  (some image hosts refuse requests without it). `ytdl:` links from gallery-dl become media
+  downloads.
+- One batch shares one `createdAt`; `DownloadRecord.listOrder`/`queueOrder` break ties by
+  `groupIndex`, so a playlist is listed and downloaded in playlist order.
+- The list draws a header for each run of consecutive group members (big groups start
+  collapsed). Group actions are just the existing intents applied to the members' ids.

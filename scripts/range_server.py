@@ -7,6 +7,7 @@ Prints the bound port on the first line of stdout.
   /<file>                  serve a file (206 for Range requests unless --no-range)
   /<file>?cd=<name>        also send Content-Disposition: attachment; filename="<name>"
   /redirect/<file>         302 to /<file>
+  /referer/<file>          403 unless the request carries a Referer header
 """
 import argparse
 import mimetypes
@@ -41,6 +42,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/" + quote(path[len("/redirect/"):]) + (("?" + parts.query) if parts.query else ""))
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        if path.startswith("/referer/") and not self.headers.get("Referer"):
+            self.send_error(403)
             return
         local = os.path.join(self.root, os.path.basename(path))
         if not os.path.isfile(local):

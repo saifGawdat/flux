@@ -6,6 +6,7 @@ enum MediaOutput {
     static let progressTemplate =
         "download:FLUXPROG|%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(info.format_id)s"
     static let titleTemplate = "before_dl:FLUXTITLE|%(title)s"
+    static let thumbnailTemplate = "before_dl:FLUXTHUMB|%(thumbnail)s"
     static let fileTemplate = "after_move:FLUXFILE|%(filepath)s"
 
     struct Progress: Equatable {
@@ -20,6 +21,7 @@ enum MediaOutput {
     enum Line: Equatable {
         case progress(Progress)
         case title(String)
+        case thumbnail(URL)
         case finalFile(String)
         case postProcessing(String)
         case error(String)
@@ -36,6 +38,7 @@ enum MediaOutput {
                 speed: Double(f[5]), formatID: f[6] == "NA" ? nil : f[6]))
         }
         if let title = line.dropPrefix("FLUXTITLE|") { return .title(title) }
+        if let thumb = line.dropPrefix("FLUXTHUMB|") { return Thumbnails.remote(thumb).map(Line.thumbnail) ?? .other }
         if let path = line.dropPrefix("FLUXFILE|") { return .finalFile(path) }
         if let message = line.dropPrefix("ERROR: ") { return .error(message) }
         if line.hasPrefix("[Merger]") { return .postProcessing("Merging video and audio…") }

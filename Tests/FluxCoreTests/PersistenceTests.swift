@@ -36,6 +36,7 @@ struct PersistenceTests {
         record.partFileName = "custom.zip.1234.fluxpart"
         record.finalPath = URL(fileURLWithPath: "/tmp/dl/custom.zip")
         record.completedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        record.thumbnailURL = URL(string: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg")
 
         try await db.save(record)
         try await db.save(record) // upsert, not duplicate

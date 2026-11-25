@@ -42,8 +42,9 @@ public actor FluxDatabase {
                 id, url, file_name, user_named_file, directory, total_bytes, received_bytes,
                 supports_ranges, etag, last_modified, segments, status, error_message, priority,
                 max_connections, part_file_name, final_path, created_at, completed_at,
-                kind, media_format, title
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                kind, media_format, title, thumbnail_url,
+                group_id, group_title, group_kind, group_index, referer
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url, file_name = excluded.file_name,
                 user_named_file = excluded.user_named_file, directory = excluded.directory,
@@ -54,7 +55,11 @@ public actor FluxDatabase {
                 priority = excluded.priority, max_connections = excluded.max_connections,
                 part_file_name = excluded.part_file_name, final_path = excluded.final_path,
                 completed_at = excluded.completed_at, kind = excluded.kind,
-                media_format = excluded.media_format, title = excluded.title
+                media_format = excluded.media_format, title = excluded.title,
+                thumbnail_url = excluded.thumbnail_url,
+                group_id = excluded.group_id, group_title = excluded.group_title,
+                group_kind = excluded.group_kind, group_index = excluded.group_index,
+                referer = excluded.referer
             """, [
                 .text(record.id.uuidString),
                 .text(record.url.absoluteString),
@@ -78,7 +83,20 @@ public actor FluxDatabase {
                 .text(record.kind.rawValue),
                 .text(record.mediaFormat?.rawValue),
                 .text(record.title),
+                .text(record.thumbnailURL?.absoluteString),
+                .text(record.group?.id.uuidString),
+                .text(record.group?.title),
+                .text(record.group?.kind.rawValue),
+                .integer(Int64(record.groupIndex)),
+                .text(record.referer?.absoluteString),
             ])
+    }
+
+    /// Saves many records in one transaction (adding a whole playlist).
+    public func save(_ records: [DownloadRecord]) throws {
+        try connection.transaction {
+            for record in records { try save(record) }
+        }
     }
 
     public func deleteDownloads(_ ids: [UUID]) throws {
@@ -149,6 +167,15 @@ public actor FluxDatabase {
         record.kind = row.string("kind").flatMap(DownloadKind.init(rawValue:)) ?? .file
         record.mediaFormat = row.string("media_format").flatMap(MediaFormat.init(rawValue:))
         record.title = row.string("title")
+        record.thumbnailURL = row.string("thumbnail_url").flatMap(Thumbnails.remote)
+        if let groupID = row.string("group_id").flatMap(UUID.init(uuidString:)) {
+            record.group = DownloadGroup(
+                id: groupID,
+                title: row.string("group_title") ?? "",
+                kind: row.string("group_kind").flatMap(DownloadGroup.Kind.init(rawValue:)) ?? .playlist)
+        }
+        record.groupIndex = Int(row.int64("group_index") ?? 0)
+        record.referer = row.string("referer").flatMap(Thumbnails.remote)
         return record
     }
 }

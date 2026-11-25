@@ -17,7 +17,7 @@ struct SettingsView: View {
                     set: { value in model.updateSettings { $0.resumeOnLaunch = value } }
                 ))
             }
-            Section("Video & Audio") {
+            Section("Video, Audio & Images") {
                 Picker("Default format", selection: Binding(
                     get: { model.settings.defaultMediaFormat },
                     set: { value in model.updateSettings { $0.defaultMediaFormat = value } }
@@ -28,7 +28,9 @@ struct SettingsView: View {
                               url: model.mediaTools.ytdlp, version: model.toolVersions["yt-dlp"])
                 ToolStatusRow(name: "ffmpeg", purpose: "Merges video + audio, converts to MP3/MP4",
                               url: model.mediaTools.ffmpeg, version: model.toolVersions["ffmpeg"])
-                if model.mediaTools.ytdlp == nil || model.mediaTools.ffmpeg == nil {
+                ToolStatusRow(name: "gallery-dl", purpose: "Image galleries: Instagram, Reddit, Flickr, Tumblr, …",
+                              url: model.mediaTools.galleryDL, version: model.toolVersions["gallery-dl"])
+                if model.mediaTools.ytdlp == nil || model.mediaTools.ffmpeg == nil || model.mediaTools.galleryDL == nil {
                     MissingToolsNotice()
                 } else {
                     Button("Check Again") { model.refreshMediaTools() }

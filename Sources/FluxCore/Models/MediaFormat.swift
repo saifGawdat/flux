@@ -11,8 +11,11 @@ public enum DownloadKind: String, Codable, Sendable, CaseIterable {
 /// Output choice for media downloads.
 public enum MediaFormat: String, Codable, Sendable, CaseIterable, Identifiable {
     case best
+    case mp4_2160 = "mp4-2160"
+    case mp4_1440 = "mp4-1440"
     case mp4_1080 = "mp4-1080"
     case mp4_720 = "mp4-720"
+    case mp4_480 = "mp4-480"
     case mp3
     case m4a
 
@@ -21,8 +24,11 @@ public enum MediaFormat: String, Codable, Sendable, CaseIterable, Identifiable {
     public var title: String {
         switch self {
         case .best: "Best quality"
+        case .mp4_2160: "4K MP4"
+        case .mp4_1440: "1440p MP4"
         case .mp4_1080: "1080p MP4"
         case .mp4_720: "720p MP4"
+        case .mp4_480: "480p MP4"
         case .mp3: "Audio only · MP3"
         case .m4a: "Audio only · M4A"
         }
@@ -33,8 +39,11 @@ public enum MediaFormat: String, Codable, Sendable, CaseIterable, Identifiable {
     /// Resolution cap for the MP4 presets.
     public var maxHeight: Int? {
         switch self {
+        case .mp4_2160: 2160
+        case .mp4_1440: 1440
         case .mp4_1080: 1080
         case .mp4_720: 720
+        case .mp4_480: 480
         default: nil
         }
     }
@@ -45,10 +54,8 @@ public enum MediaFormat: String, Codable, Sendable, CaseIterable, Identifiable {
         switch self {
         case .best:
             return hasFFmpeg ? ["-f", "bv*+ba/b"] : ["-f", "b"]
-        case .mp4_1080:
-            return Self.mp4(maxHeight: 1080, hasFFmpeg: hasFFmpeg)
-        case .mp4_720:
-            return Self.mp4(maxHeight: 720, hasFFmpeg: hasFFmpeg)
+        case .mp4_2160, .mp4_1440, .mp4_1080, .mp4_720, .mp4_480:
+            return Self.mp4(maxHeight: maxHeight ?? 1080, hasFFmpeg: hasFFmpeg)
         case .mp3:
             return hasFFmpeg
                 ? ["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "0"]
@@ -63,6 +70,7 @@ public enum MediaFormat: String, Codable, Sendable, CaseIterable, Identifiable {
     private static func mp4(maxHeight h: Int, hasFFmpeg: Bool) -> [String] {
         if hasFFmpeg {
             // H.264 first: plays everywhere (QuickTime, iPhone) and sites list exact sizes for it.
+            // Above 1080p most sites only offer VP9/AV1, which the later alternatives pick.
             return ["-f", "bv*[height<=\(h)][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=\(h)][ext=mp4]+ba[ext=m4a]/b[height<=\(h)][ext=mp4]/bv*[height<=\(h)]+ba/b[height<=\(h)]/b",
                     "--merge-output-format", "mp4"]
         }

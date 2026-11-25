@@ -16,6 +16,37 @@ public struct MediaPreview: Sendable, Equatable {
     public var options: [MediaFormat: Option]
 }
 
+/// A list of videos (YouTube playlist or channel, SoundCloud set, Vimeo showcase, …).
+public struct MediaPlaylist: Sendable, Equatable {
+    public struct Entry: Sendable, Equatable, Identifiable {
+        /// The entry's URL, which is unique within a playlist.
+        public var id: String
+        public var url: URL
+        public var title: String
+        public var duration: Double?
+        public var thumbnailURL: URL?
+        /// Private, deleted or not yet premiered.
+        public var isAvailable: Bool
+        /// A nested list (a channel's playlists); expanded before it reaches the UI.
+        var isPlaylist: Bool = false
+    }
+
+    public var title: String
+    public var uploader: String?
+    public var entries: [Entry]
+    /// Only the first `MediaProbe.playlistLimit` entries were read.
+    public var isTruncated: Bool
+
+    public var availableEntries: [Entry] { entries.filter(\.isAvailable) }
+}
+
+/// What yt-dlp found behind a link: a single video, a playlist, or (YouTube video opened
+/// from a playlist) both.
+public struct MediaInspection: Sendable, Equatable {
+    public var video: MediaPreview?
+    public var playlist: MediaPlaylist?
+}
+
 public enum MediaProbeError: LocalizedError {
     case toolMissing
     case failed(String)
@@ -53,22 +84,65 @@ public enum MediaProbe {
     }
 
     public static func preview(of url: URL, tools: MediaTools) async throws -> MediaPreview {
+        try await withInfo(of: url, playlist: false, tools: tools) { infoFile, json in
+            try await options(infoFile: infoFile, json: json, tools: tools)
+        }
+    }
+
+    /// Looks at a link that may be a playlist (or channel). For a YouTube video opened
+    /// from a playlist (`watch?v=…&list=…`) both the video and its playlist are returned.
+    public static func inspect(_ url: URL, tools: MediaTools) async throws -> MediaInspection {
+        let alsoSingle = Self.isVideoInPlaylist(url)
+        async let single: MediaPreview? = alsoSingle ? try? await preview(of: url, tools: tools) : nil
+        let first = try await withInfo(of: url, playlist: true, tools: tools) { infoFile, json -> MediaInspection in
+            if let playlist = try playlistInfo(from: json) {
+                return MediaInspection(video: nil, playlist: try await expandNested(playlist, tools: tools))
+            }
+            return MediaInspection(video: try await options(infoFile: infoFile, json: json, tools: tools), playlist: nil)
+        }
+        if first.playlist != nil, let video = await single {
+            return MediaInspection(video: video, playlist: first.playlist)
+        }
+        return first
+    }
+
+    /// Most entries a playlist listing reads (huge channels would take minutes).
+    static let playlistLimit = 1000
+
+    /// YouTube `watch?v=ID&list=…`: one video that is also part of a playlist.
+    static func isVideoInPlaylist(_ url: URL) -> Bool {
+        guard Thumbnails.youTube(for: url) != nil else { return false }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .contains { $0.name == "list" && !($0.value ?? "").isEmpty } ?? false
+    }
+
+    /// Fetches the page JSON once into a temp file and hands it to `body`.
+    private static func withInfo<T>(
+        of url: URL, playlist: Bool, tools: MediaTools, _ body: (URL, Data) async throws -> T
+    ) async throws -> T {
         guard let ytdlp = tools.ytdlp else { throw MediaProbeError.toolMissing }
         let workDir = FileManager.default.temporaryDirectory.appendingPathComponent("flux-probe-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workDir) }
 
         let infoFile = workDir.appendingPathComponent("info.json")
-        let env = tools.processEnvironment()
-        let fetch = try await ProcessRunner.run(
-            ytdlp, ["-J", "--no-playlist", "--no-warnings", "--", url.absoluteString],
-            environment: env, stdoutFile: infoFile)
+        var args = ["-J", "--no-warnings"]
+        args += playlist
+            ? ["--yes-playlist", "--flat-playlist", "--playlist-items", "1:\(playlistLimit)"]
+            : ["--no-playlist"]
+        args += ["--", url.absoluteString]
+        let fetch = try await ProcessRunner.run(ytdlp, args, environment: tools.processEnvironment(), stdoutFile: infoFile)
         guard fetch.status == 0 else {
             let message = fetch.stderrLines.last { $0.hasPrefix("ERROR: ") }.map { String($0.dropFirst(7)) }
             throw MediaProbeError.failed(MediaJob.friendly(message) ?? "Couldn't read this page.")
         }
-        let page = try pageInfo(from: Data(contentsOf: infoFile))
+        return try await body(infoFile, try Data(contentsOf: infoFile))
+    }
 
+    private static func options(infoFile: URL, json: Data, tools: MediaTools) async throws -> MediaPreview {
+        guard let ytdlp = tools.ytdlp else { throw MediaProbeError.toolMissing }
+        let page = try pageInfo(from: json)
+        let env = tools.processEnvironment()
         let options = await withTaskGroup(of: (MediaFormat, MediaPreview.Option?).self) { group in
             for format in MediaFormat.allCases {
                 group.addTask {
@@ -85,6 +159,95 @@ public enum MediaProbe {
         }
         try Task.checkCancellation()
         return MediaPreview(title: page.title, duration: page.duration, options: options)
+    }
+
+    /// Channel pages can list playlists (e.g. a "Playlists" tab); read those one level deep.
+    private static func expandNested(_ playlist: MediaPlaylist, tools: MediaTools) async throws -> MediaPlaylist {
+        let nested = playlist.entries.filter(\.isPlaylist)
+        guard !nested.isEmpty else { return playlist }
+        let lists = await withTaskGroup(of: (String, [MediaPlaylist.Entry]).self) { group in
+            for entry in nested.prefix(25) {
+                group.addTask {
+                    let inner = try? await withInfo(of: entry.url, playlist: true, tools: tools) { _, json in
+                        try playlistInfo(from: json)
+                    }
+                    return (entry.id, inner?.entries.filter { !$0.isPlaylist } ?? [])
+                }
+            }
+            var result: [String: [MediaPlaylist.Entry]] = [:]
+            for await (id, entries) in group { result[id] = entries }
+            return result
+        }
+        var expanded = playlist
+        expanded.entries = playlist.entries.flatMap { $0.isPlaylist ? lists[$0.id] ?? [] : [$0] }
+        var seen = Set<URL>()
+        expanded.entries = expanded.entries.filter { seen.insert($0.url).inserted }
+        return expanded
+    }
+
+    /// nil when the JSON describes a single video rather than a list.
+    static func playlistInfo(from data: Data) throws -> MediaPlaylist? {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw MediaProbeError.failed("yt-dlp returned unreadable data.")
+        }
+        guard (object["_type"] as? String) == "playlist" || object["entries"] != nil else { return nil }
+        let raw = object["entries"] as? [[String: Any]] ?? []
+        var entries: [MediaPlaylist.Entry] = []
+        var seen = Set<URL>()
+        for (index, entry) in raw.enumerated() {
+            // A playlist can hold the same video twice; download it once.
+            guard let url = entryURL(entry), seen.insert(url).inserted else { continue }
+            let knownTitle = (entry["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let ieKey = entry["ie_key"] as? String ?? ""
+            let availability = (entry["availability"] as? String ?? "").lowercased()
+            // YouTube lists private and deleted videos either by a bracketed title or with no
+            // title and no duration at all; every watchable entry has a title.
+            let hiddenOnYouTube = ieKey == "Youtube" && knownTitle == nil && !(entry["duration"] is NSNumber)
+            let unavailable = hiddenOnYouTube
+                || ["[private video]", "[deleted video]", "[unavailable video]"].contains(knownTitle?.lowercased() ?? "")
+                || ["private", "needs_auth", "subscriber_only", "premium_only"].contains(availability)
+                || (entry["live_status"] as? String) == "is_upcoming"
+            let title = knownTitle ?? (hiddenOnYouTube ? "Private or deleted video" : "Item \(index + 1)")
+            let isPlaylist = (entry["_type"] as? String) == "playlist" || ieKey.hasSuffix("Tab") || ieKey.hasSuffix("Playlist")
+            entries.append(MediaPlaylist.Entry(
+                id: url.absoluteString,
+                url: url,
+                title: title,
+                duration: (entry["duration"] as? NSNumber)?.doubleValue,
+                thumbnailURL: thumbnail(entry),
+                isAvailable: !unavailable,
+                isPlaylist: isPlaylist))
+        }
+        let count = (object["playlist_count"] as? NSNumber)?.intValue
+        return MediaPlaylist(
+            title: (object["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Playlist",
+            uploader: object["uploader"] as? String ?? object["channel"] as? String,
+            entries: entries,
+            isTruncated: raw.count >= playlistLimit && (count ?? Int.max) > raw.count)
+    }
+
+    private static func entryURL(_ entry: [String: Any]) -> URL? {
+        for key in ["url", "webpage_url", "original_url"] {
+            if let text = entry[key] as? String, let url = URL(string: text), LinkExtractor.isDownloadable(url) {
+                return url
+            }
+        }
+        // Some extractors list bare video IDs.
+        if (entry["ie_key"] as? String) == "Youtube", let id = entry["id"] as? String {
+            return URL(string: "https://www.youtube.com/watch?v=\(id)")
+        }
+        return nil
+    }
+
+    /// The smallest listed thumbnail at least 320 px wide (else the largest).
+    private static func thumbnail(_ entry: [String: Any]) -> URL? {
+        let list = (entry["thumbnails"] as? [[String: Any]] ?? []).compactMap { t -> (URL, Int)? in
+            guard let url = (t["url"] as? String).flatMap(Thumbnails.remote) else { return nil }
+            return (url, (t["width"] as? NSNumber)?.intValue ?? 0)
+        }
+        if let good = list.filter({ $0.1 >= 320 }).min(by: { $0.1 < $1.1 }) { return good.0 }
+        if let largest = list.max(by: { $0.1 < $1.1 }) { return largest.0 }
+        return (entry["thumbnail"] as? String).flatMap(Thumbnails.remote)
     }
 
     static func pageInfo(from data: Data) throws -> PageInfo {
