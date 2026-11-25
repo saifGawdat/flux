@@ -102,7 +102,7 @@ func makeJob(_ record: DownloadRecord, options: DownloadJob.Options = fastOption
 }
 
 /// Waits until the job reports a terminal status and returns that record.
-func finish(_ job: DownloadJob, _ log: SnapshotLog, timeout: TimeInterval = 30) async throws -> DownloadRecord {
+func finish(_ job: any TransferJob, _ log: SnapshotLog, timeout: TimeInterval = 30) async throws -> DownloadRecord {
     try await eventually("job to finish", timeout: timeout) {
         [.completed, .failed].contains(log.last?.record.status)
     }

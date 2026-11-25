@@ -9,6 +9,7 @@ Prints the bound port on the first line of stdout.
   /redirect/<file>         302 to /<file>
 """
 import argparse
+import mimetypes
 import os
 import re
 import sys
@@ -69,7 +70,7 @@ class Handler(BaseHTTPRequestHandler):
                 status = 206
 
         self.send_response(status)
-        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Type", mimetypes.guess_type(local)[0] or "application/octet-stream")
         self.send_header("Content-Length", str(end - start + 1))
         self.send_header("ETag", etag)
         if not self.no_range:

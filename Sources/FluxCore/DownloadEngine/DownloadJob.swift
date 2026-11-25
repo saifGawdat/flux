@@ -5,16 +5,8 @@ import Foundation
 ///
 /// The actor executes on a private serial queue that is also the URLSession delegate
 /// queue, so delegate callbacks enter the actor synchronously and in arrival order.
-public actor DownloadJob {
-    public struct Snapshot: Sendable {
-        public let record: DownloadRecord
-        public let bytesPerSecond: Double
-        public let activeConnections: Int
-        /// Strictly increasing per job; consumers drop anything not newer than what they have.
-        public let sequence: UInt64
-        /// The part file was fsync'ed: `record`'s byte counts are durable and safe to persist.
-        public let isCheckpoint: Bool
-    }
+public actor DownloadJob: TransferJob {
+    public typealias Snapshot = TransferSnapshot
 
     public struct Options: Sendable {
         /// A segment is only split when both halves would be at least this large.
@@ -26,6 +18,8 @@ public actor DownloadJob {
         public var progressInterval: Duration = .milliseconds(500)
         public var checkpointInterval: TimeInterval = 2
         public var retryBaseDelay: Double = 1
+        /// Stop (and flag the snapshot) when a link returns an HTML page instead of a file.
+        public var detectWebPages = true
         public init() {}
     }
 
@@ -58,6 +52,7 @@ public actor DownloadJob {
     private var ticker: Task<Void, Never>?
     private var lastCheckpoint: TimeInterval = 0
     private var sequence: UInt64 = 0
+    private var landedOnWebPage = false
 
     public init(record: DownloadRecord, options: Options = Options(), onUpdate: @escaping @Sendable (Snapshot) -> Void) {
         self.id = record.id
@@ -79,6 +74,7 @@ public actor DownloadJob {
     public func start() {
         guard !isRunning, record.status != .completed else { return }
         isRunning = true
+        landedOnWebPage = false
         generation += 1
         consecutiveFailures = 0
         restarts = 0
@@ -324,6 +320,13 @@ public actor DownloadJob {
                 tasks[task.taskIdentifier] = nil
                 completion(.cancel)
                 handleError(Self.describe(status: status), retryable: Self.isRetryable(status: status))
+                return
+            }
+            if options.detectWebPages, !isEmptyFile, http.mimeType?.lowercased() == "text/html" {
+                tasks[task.taskIdentifier] = nil
+                completion(.cancel)
+                landedOnWebPage = true
+                fail("This link opens a web page, not a file.")
                 return
             }
             adoptFirstResponse(http, contentRange: contentRange)
@@ -613,7 +616,8 @@ public actor DownloadJob {
             bytesPerSecond: isRunning ? currentRate : 0,
             activeConnections: tasks.count,
             sequence: sequence,
-            isCheckpoint: checkpoint
+            isCheckpoint: checkpoint,
+            landedOnWebPage: landedOnWebPage
         )
     }
 

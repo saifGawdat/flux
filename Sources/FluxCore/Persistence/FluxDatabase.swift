@@ -41,8 +41,9 @@ public actor FluxDatabase {
             INSERT INTO downloads (
                 id, url, file_name, user_named_file, directory, total_bytes, received_bytes,
                 supports_ranges, etag, last_modified, segments, status, error_message, priority,
-                max_connections, part_file_name, final_path, created_at, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                max_connections, part_file_name, final_path, created_at, completed_at,
+                kind, media_format, title
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url, file_name = excluded.file_name,
                 user_named_file = excluded.user_named_file, directory = excluded.directory,
@@ -52,7 +53,8 @@ public actor FluxDatabase {
                 status = excluded.status, error_message = excluded.error_message,
                 priority = excluded.priority, max_connections = excluded.max_connections,
                 part_file_name = excluded.part_file_name, final_path = excluded.final_path,
-                completed_at = excluded.completed_at
+                completed_at = excluded.completed_at, kind = excluded.kind,
+                media_format = excluded.media_format, title = excluded.title
             """, [
                 .text(record.id.uuidString),
                 .text(record.url.absoluteString),
@@ -73,6 +75,9 @@ public actor FluxDatabase {
                 .text(record.finalPath?.path),
                 .real(record.createdAt.timeIntervalSince1970),
                 .real(record.completedAt?.timeIntervalSince1970),
+                .text(record.kind.rawValue),
+                .text(record.mediaFormat?.rawValue),
+                .text(record.title),
             ])
     }
 
@@ -141,6 +146,9 @@ public actor FluxDatabase {
         record.partFileName = row.string("part_file_name")
         record.finalPath = row.string("final_path").map { URL(fileURLWithPath: $0) }
         record.completedAt = row.double("completed_at").map { Date(timeIntervalSince1970: $0) }
+        record.kind = row.string("kind").flatMap(DownloadKind.init(rawValue:)) ?? .file
+        record.mediaFormat = row.string("media_format").flatMap(MediaFormat.init(rawValue:))
+        record.title = row.string("title")
         return record
     }
 }

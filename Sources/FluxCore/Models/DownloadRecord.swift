@@ -64,6 +64,11 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     public var finalPath: URL?
     public var createdAt: Date
     public var completedAt: Date?
+    public var kind: DownloadKind
+    /// Output choice when `kind == .media`.
+    public var mediaFormat: MediaFormat?
+    /// Human title reported by the media extractor.
+    public var title: String?
 
     public init(
         id: UUID = UUID(),
@@ -72,6 +77,8 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
         fileName: String? = nil,
         maxConnections: Int = 8,
         priority: DownloadPriority = .normal,
+        kind: DownloadKind = .file,
+        mediaFormat: MediaFormat? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -86,6 +93,8 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
         self.priority = priority
         self.maxConnections = max(1, maxConnections)
         self.createdAt = createdAt
+        self.kind = kind
+        self.mediaFormat = mediaFormat
     }
 
     public var receivedBytes: Int64 { segments.reduce(0) { $0 + $1.received } }

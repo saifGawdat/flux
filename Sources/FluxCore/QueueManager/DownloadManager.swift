@@ -7,6 +7,8 @@ public actor DownloadManager {
         public var record: DownloadRecord
         public var bytesPerSecond: Double
         public var activeConnections: Int
+        /// Current stage for display, e.g. "Merging video and audio…".
+        public var detail: String?
         public var id: UUID { record.id }
     }
 
@@ -25,6 +27,10 @@ public actor DownloadManager {
         public var connections: Int?
         public var priority: DownloadPriority
         public var startImmediately: Bool
+        /// nil = decide automatically from the link.
+        public var kind: DownloadKind?
+        /// nil = use the default from settings.
+        public var mediaFormat: MediaFormat?
 
         public init(
             url: URL,
@@ -32,7 +38,9 @@ public actor DownloadManager {
             fileName: String? = nil,
             connections: Int? = nil,
             priority: DownloadPriority = .normal,
-            startImmediately: Bool = true
+            startImmediately: Bool = true,
+            kind: DownloadKind? = nil,
+            mediaFormat: MediaFormat? = nil
         ) {
             self.url = url
             self.directory = directory
@@ -40,16 +48,19 @@ public actor DownloadManager {
             self.connections = connections
             self.priority = priority
             self.startImmediately = startImmediately
+            self.kind = kind
+            self.mediaFormat = mediaFormat
         }
     }
 
     private struct JobHandle {
-        let job: DownloadJob
-        let continuation: AsyncStream<DownloadJob.Snapshot>.Continuation
+        let job: any TransferJob
+        let continuation: AsyncStream<TransferSnapshot>.Continuation
     }
 
     private let database: FluxDatabase
     private let jobOptions: DownloadJob.Options
+    public private(set) var mediaTools: MediaTools
     private var items: [UUID: Item] = [:]
     private var jobs: [UUID: JobHandle] = [:]
     private var lastSequence: [UUID: UInt64] = [:]
@@ -59,9 +70,14 @@ public actor DownloadManager {
 
     /// Loads persisted state and recovers downloads interrupted by quit or crash.
     /// Call `start()` to begin scheduling.
-    public init(database: FluxDatabase, jobOptions: DownloadJob.Options = .init()) async throws {
+    public init(
+        database: FluxDatabase,
+        jobOptions: DownloadJob.Options = .init(),
+        mediaTools: MediaTools = .discover()
+    ) async throws {
         self.database = database
         self.jobOptions = jobOptions
+        self.mediaTools = mediaTools
         let settings = try await database.loadSettings()
         self.settings = settings
         var recovered: [DownloadRecord] = []
@@ -70,7 +86,7 @@ public actor DownloadManager {
                 record.status = settings.resumeOnLaunch ? .queued : .paused
                 recovered.append(record)
             }
-            items[record.id] = Item(record: record, bytesPerSecond: 0, activeConnections: 0)
+            items[record.id] = Item(record: record, bytesPerSecond: 0, activeConnections: 0, detail: nil)
         }
         for record in recovered { try await database.save(record) }
         if !recovered.isEmpty {
@@ -124,10 +140,12 @@ public actor DownloadManager {
                 directory: request.directory ?? settings.downloadDirectory,
                 fileName: request.fileName,
                 maxConnections: request.connections ?? settings.connectionsPerDownload,
-                priority: request.priority)
+                priority: request.priority,
+                kind: request.kind ?? (MediaRouting.prefersMedia(request.url) ? .media : .file),
+                mediaFormat: request.mediaFormat ?? settings.defaultMediaFormat)
             record.status = request.startImmediately ? .queued : .paused
             try await database.save(record)
-            let item = Item(record: record, bytesPerSecond: 0, activeConnections: 0)
+            let item = Item(record: record, bytesPerSecond: 0, activeConnections: 0, detail: nil)
             items[record.id] = item
             broadcast(.updated(item))
             ids.append(record.id)
@@ -225,6 +243,11 @@ public actor DownloadManager {
         await schedule()
     }
 
+    /// Re-scans for yt-dlp/ffmpeg (e.g. after the user installs them).
+    public func refreshMediaTools(_ tools: MediaTools = .discover()) {
+        mediaTools = tools
+    }
+
     /// Checkpoints every running download so it resumes at next launch. Call before quitting.
     public func shutdown() async {
         isStarted = false
@@ -261,11 +284,15 @@ public actor DownloadManager {
         }
     }
 
-    private func job(for id: UUID) -> DownloadJob? {
+    private func job(for id: UUID) -> (any TransferJob)? {
         if let handle = jobs[id] { return handle.job }
         guard let record = items[id]?.record else { return nil }
-        let (stream, continuation) = AsyncStream.makeStream(of: DownloadJob.Snapshot.self)
-        let job = DownloadJob(record: record, options: jobOptions) { continuation.yield($0) }
+        let (stream, continuation) = AsyncStream.makeStream(of: TransferSnapshot.self)
+        let report: @Sendable (TransferSnapshot) -> Void = { continuation.yield($0) }
+        let job: any TransferJob = switch record.kind {
+        case .file: DownloadJob(record: record, options: jobOptions, onUpdate: report)
+        case .media: MediaJob(record: record, tools: mediaTools, onUpdate: report)
+        }
         jobs[id] = JobHandle(job: job, continuation: continuation)
         lastSequence[id] = 0
         Task { [weak self] in
@@ -281,17 +308,22 @@ public actor DownloadManager {
     }
 
     /// Merges a job snapshot. The job owns transfer state; the manager owns `priority`.
-    private func apply(_ snapshot: DownloadJob.Snapshot) async {
+    private func apply(_ snapshot: TransferSnapshot) async {
         let id = snapshot.record.id
         guard let current = items[id], snapshot.sequence > (lastSequence[id] ?? 0)
         else { return }
         lastSequence[id] = snapshot.sequence
+        if snapshot.landedOnWebPage, current.record.kind == .file {
+            await switchToMedia(id)
+            return
+        }
         var record = snapshot.record
         record.priority = current.record.priority
         let item = Item(
             record: record,
             bytesPerSecond: record.status.isActive ? snapshot.bytesPerSecond : 0,
-            activeConnections: snapshot.activeConnections)
+            activeConnections: snapshot.activeConnections,
+            detail: record.status.isActive ? snapshot.detail : nil)
         items[id] = item
         broadcast(.updated(item))
 
@@ -305,10 +337,39 @@ public actor DownloadManager {
         }
     }
 
+    /// A "file" link turned out to be a web page: hand it to the media extractor.
+    private func switchToMedia(_ id: UUID) async {
+        dropJob(id)
+        guard mediaTools.ytdlp != nil else {
+            await update(id) {
+                $0.status = .failed
+                $0.errorMessage = "This link opens a web page. To download videos from pages, install yt-dlp: brew install yt-dlp ffmpeg"
+            }
+            await schedule()
+            return
+        }
+        Log.manager.info("Download \(id, privacy: .public) is a web page; switching to media extraction")
+        await update(id) {
+            $0.kind = .media
+            $0.mediaFormat = $0.mediaFormat ?? self.settings.defaultMediaFormat
+            $0.status = .queued
+            $0.errorMessage = nil
+            $0.segments = []
+            $0.totalBytes = nil
+            $0.partFileName = nil
+            $0.supportsRanges = false
+        }
+        // It was counted as active; the slot is free again.
+        await schedule()
+    }
+
     private func update(_ id: UUID, _ change: (inout DownloadRecord) -> Void) async {
         guard var item = items[id] else { return }
         change(&item.record)
-        if !item.record.status.isActive { item.bytesPerSecond = 0 }
+        if !item.record.status.isActive {
+            item.bytesPerSecond = 0
+            item.detail = nil
+        }
         items[id] = item
         broadcast(.updated(item))
         await persist(item.record)

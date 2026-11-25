@@ -9,6 +9,7 @@ public struct FluxSettings: Codable, Sendable, Equatable {
     public var maxConcurrentDownloads: Int
     public var connectionsPerDownload: Int
     public var resumeOnLaunch: Bool
+    public var defaultMediaFormat: MediaFormat
 
     public static var defaultDownloadDirectory: URL {
         FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
@@ -19,12 +20,14 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         downloadDirectory: URL = FluxSettings.defaultDownloadDirectory,
         maxConcurrentDownloads: Int = 3,
         connectionsPerDownload: Int = 8,
-        resumeOnLaunch: Bool = true
+        resumeOnLaunch: Bool = true,
+        defaultMediaFormat: MediaFormat = .best
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConcurrentDownloads = maxConcurrentDownloads
         self.connectionsPerDownload = connectionsPerDownload
         self.resumeOnLaunch = resumeOnLaunch
+        self.defaultMediaFormat = defaultMediaFormat
     }
 
     /// Tolerates missing keys so older stored settings keep working after upgrades.
@@ -35,6 +38,7 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         maxConcurrentDownloads = try c.decodeIfPresent(Int.self, forKey: .maxConcurrentDownloads) ?? defaults.maxConcurrentDownloads
         connectionsPerDownload = try c.decodeIfPresent(Int.self, forKey: .connectionsPerDownload) ?? defaults.connectionsPerDownload
         resumeOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .resumeOnLaunch) ?? defaults.resumeOnLaunch
+        defaultMediaFormat = (try? c.decodeIfPresent(MediaFormat.self, forKey: .defaultMediaFormat)) ?? defaults.defaultMediaFormat
     }
 
     /// Clamps values into supported ranges.

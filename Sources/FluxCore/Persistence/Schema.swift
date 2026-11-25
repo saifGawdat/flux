@@ -40,6 +40,11 @@ enum Schema {
                 value TEXT NOT NULL
             );
             """),
+        Migration(version: 2, name: "media downloads", sql: """
+            ALTER TABLE downloads ADD COLUMN kind TEXT NOT NULL DEFAULT 'file';
+            ALTER TABLE downloads ADD COLUMN media_format TEXT;
+            ALTER TABLE downloads ADD COLUMN title TEXT;
+            """),
     ]
 
     static var latestVersion: Int { migrations.last?.version ?? 0 }
