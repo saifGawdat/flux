@@ -20,6 +20,12 @@ struct DownloadRow: View {
                         .font(.body.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if record.kind == .media {
+                        Image(systemName: record.mediaFormat?.isAudioOnly == true ? "music.note" : "play.rectangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help(record.mediaFormat?.title ?? "Media")
+                    }
                     if record.priority != .normal, record.status != .completed {
                         PriorityBadge(priority: record.priority)
                     }
@@ -68,14 +74,17 @@ struct DownloadRow: View {
         case .queued:
             return "Queued · \(host)" + (record.receivedBytes > 0 ? " · \(amount)" : "")
         case .connecting:
-            return "Connecting to \(host)…"
+            return item.detail ?? "Connecting to \(host)…"
         case .downloading:
+            if let detail = item.detail, item.bytesPerSecond == 0 { return detail }
             var parts = [amount, Format.speed(item.bytesPerSecond)]
             if let eta = item.secondsRemaining { parts.append("\(Format.duration(eta)) left") }
             if item.activeConnections > 1 { parts.append("\(item.activeConnections) connections") }
+            if let detail = item.detail { parts.append(detail) }
             return parts.joined(separator: " · ")
         case .paused:
-            let note = record.receivedBytes > 0 && !record.supportsRanges ? " · server can’t resume, will restart" : ""
+            let note = record.kind == .file && record.receivedBytes > 0 && !record.supportsRanges
+                ? " · server can’t resume, will restart" : ""
             return "Paused · \(amount)\(percent)\(note)"
         case .completed:
             let size = Format.bytes(record.totalBytes ?? record.receivedBytes)

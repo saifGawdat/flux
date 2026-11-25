@@ -18,6 +18,9 @@ What works today:
 - Retry with exponential backoff; automatic connection reduction for strict servers
 - Queue with simultaneous-download limit and High / Normal / Low priority
 - Safe file names (sanitized, never overwrite: `name (1).ext`), quarantine + “Where from”
+- **Video & audio from 1,800+ sites** (YouTube, Vimeo, X, TikTok, Instagram, SoundCloud, …)
+  via yt-dlp: best quality, 1080p/720p MP4, MP3 or M4A; pause/resume; links that turn out
+  to be web pages are handed to yt-dlp automatically
 - Downloads window with per-connection progress bars, filters, search, drag & drop of
   links, context menus, settings
 
@@ -25,6 +28,21 @@ What works today:
 
 - macOS 14 or later on Apple Silicon
 - Swift 6 toolchain (Xcode or the Command Line Tools)
+
+## Video downloads (optional tools)
+
+Flux downloads direct file links by itself. For video/audio pages it uses two free
+command-line tools — install them once:
+
+```sh
+brew install yt-dlp ffmpeg
+```
+
+Flux finds them automatically (Settings → Video & Audio shows their status). Without
+ffmpeg, Flux still downloads video, but only formats that come as a single file
+(usually up to 720p on YouTube) and can't convert to MP3.
+
+Only download media you have the right to save; some sites' terms forbid it.
 
 ## Build and run
 

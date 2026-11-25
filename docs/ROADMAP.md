@@ -26,6 +26,16 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
   context menus, drag & drop of links, settings.
 - Graceful quit: active downloads are checkpointed before the app exits.
 
+## Universal media (inserted after Phase 1) ✅
+
+- `TransferJob` protocol: the manager drives file and media engines identically.
+- `MediaJob`: runs yt-dlp (1,800+ sites) in a private work folder; progress, pause/resume,
+  cancel, friendly errors, never-overwrite placement, quarantine.
+- Routing: known media sites → yt-dlp; file links answering with an HTML page → yt-dlp.
+- Format presets; graceful behavior without ffmpeg; tool status in Settings.
+- Not yet: playlists (one entry per video), managed tool install/updates inside Flux,
+  cookies/sign-in for age-restricted or private media, subtitle download.
+
 ## Phase 2 — Download engine ⬜
 Per-download/global bandwidth limits (token bucket shared across jobs), SHA-256
 verification against user-supplied checksums, mirrors, expired-URL refresh flow,

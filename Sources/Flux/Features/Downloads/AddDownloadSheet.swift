@@ -10,6 +10,7 @@ struct AddDownloadSheet: View {
     @State private var connections: Int?
     @State private var priority: DownloadPriority = .normal
     @State private var startImmediately = true
+    @State private var mediaFormat: MediaFormat?
 
     init(initialText: String) {
         _text = State(initialValue: initialText)
@@ -17,6 +18,7 @@ struct AddDownloadSheet: View {
 
     private var urls: [URL] { LinkExtractor.urls(in: text) }
     private var effectiveDirectory: URL { directory ?? model.settings.downloadDirectory }
+    private var hasMediaLinks: Bool { urls.contains(where: MediaRouting.prefersMedia) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,6 +53,21 @@ struct AddDownloadSheet: View {
                     }
                     Toggle("Start immediately", isOn: $startImmediately)
                 }
+
+                Section {
+                    Picker("Video format", selection: Binding(
+                        get: { mediaFormat ?? model.settings.defaultMediaFormat },
+                        set: { mediaFormat = $0 }
+                    )) {
+                        ForEach(MediaFormat.allCases) { Text($0.title).tag($0) }
+                    }
+                    if hasMediaLinks && model.mediaTools.ytdlp == nil {
+                        MissingToolsNotice()
+                    }
+                } footer: {
+                    Text("Used for YouTube, Vimeo and other pages with video or audio.")
+                        .foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
 
@@ -60,7 +77,8 @@ struct AddDownloadSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(urls.count > 1 ? "Add \(urls.count) Downloads" : "Add Download") {
                     model.add(urls, directory: effectiveDirectory, connections: connections,
-                              priority: priority, startImmediately: startImmediately)
+                              priority: priority, startImmediately: startImmediately,
+                              mediaFormat: mediaFormat)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -69,6 +87,31 @@ struct AddDownloadSheet: View {
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 540)
+    }
+}
+
+/// Explains how to enable video downloads when yt-dlp isn't installed.
+struct MissingToolsNotice: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Video downloads need yt-dlp", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.callout.weight(.medium))
+            Text("Run this in Terminal, then click Check Again:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Text(AppModel.installCommand)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
+                Spacer()
+                Button("Copy") { model.copyInstallCommand() }
+                Button("Check Again") { model.refreshMediaTools() }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

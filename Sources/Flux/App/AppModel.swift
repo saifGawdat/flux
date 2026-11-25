@@ -10,6 +10,7 @@ final class DownloadItemModel: Identifiable {
     private(set) var record: DownloadRecord
     private(set) var bytesPerSecond: Double = 0
     private(set) var activeConnections = 0
+    private(set) var detail: String?
 
     init(_ item: DownloadManager.Item) {
         id = item.id
@@ -21,6 +22,7 @@ final class DownloadItemModel: Identifiable {
         if record != item.record { record = item.record }
         if bytesPerSecond != item.bytesPerSecond { bytesPerSecond = item.bytesPerSecond }
         if activeConnections != item.activeConnections { activeConnections = item.activeConnections }
+        if detail != item.detail { detail = item.detail }
     }
 
     var secondsRemaining: Double? {
@@ -53,6 +55,8 @@ final class AppModel {
     private(set) var phase: Phase = .loading
     private(set) var downloads: [DownloadItemModel] = []
     private(set) var settings = FluxSettings()
+    private(set) var mediaTools = MediaTools.none
+    private(set) var toolVersions: [String: String] = [:]
     var addSheet: AddSheetRequest?
     var errorMessage: String?
 
@@ -77,6 +81,7 @@ final class AppModel {
             }
             await manager.start()
             phase = .ready
+            await loadMediaTools(from: manager)
         } catch {
             phase = .failed(error.localizedDescription)
         }
@@ -131,11 +136,14 @@ final class AppModel {
         addSheet = AddSheetRequest(text: prefill ?? clipboardLinks.map(\.absoluteString).joined(separator: "\n"))
     }
 
-    func add(_ urls: [URL], directory: URL? = nil, connections: Int? = nil, priority: DownloadPriority = .normal, startImmediately: Bool = true) {
+    func add(
+        _ urls: [URL], directory: URL? = nil, connections: Int? = nil, priority: DownloadPriority = .normal,
+        startImmediately: Bool = true, mediaFormat: MediaFormat? = nil
+    ) {
         let requests = urls.map {
             DownloadManager.NewDownload(
                 url: $0, directory: directory, connections: connections,
-                priority: priority, startImmediately: startImmediately)
+                priority: priority, startImmediately: startImmediately, mediaFormat: mediaFormat)
         }
         perform { try await $0.add(requests) }
     }
@@ -158,6 +166,34 @@ final class AppModel {
         settings = newSettings
         let committed = newSettings
         perform { try await $0.updateSettings(committed) }
+    }
+
+    // MARK: Media tools
+
+    /// Re-scans for yt-dlp and ffmpeg, e.g. after installing them with Homebrew.
+    func refreshMediaTools() {
+        guard let manager else { return }
+        Task {
+            await manager.refreshMediaTools()
+            await loadMediaTools(from: manager)
+        }
+    }
+
+    private func loadMediaTools(from manager: DownloadManager) async {
+        let tools = await manager.mediaTools
+        mediaTools = tools
+        var versions: [String: String] = [:]
+        for case let tool? in [tools.ytdlp, tools.ffmpeg] {
+            versions[tool.lastPathComponent] = await MediaTools.version(of: tool)
+        }
+        toolVersions = versions
+    }
+
+    static let installCommand = "brew install yt-dlp ffmpeg"
+
+    func copyInstallCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(Self.installCommand, forType: .string)
     }
 
     private func perform(_ operation: @escaping @Sendable (DownloadManager) async throws -> Void) {

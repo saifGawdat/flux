@@ -82,3 +82,17 @@ corrupting it.
 - Finished files get the `com.apple.quarantine` attribute so Gatekeeper checks
   downloaded apps, plus `kMDItemWhereFroms` for Finder's "Where from".
 - Only `http`/`https` URLs are accepted.
+
+### D8 — Media pages go through yt-dlp, not a home-grown extractor
+Sites like YouTube serve video through signed, expiring, frequently changing stream URLs,
+often as separate video and audio streams. Keeping extractors current for hundreds of
+sites is a full-time project, so Flux delegates to yt-dlp (+ ffmpeg for merging and
+conversion) as an external, user-installed tool:
+- yt-dlp runs with its working folder set to `.flux-<id>` inside the destination, so
+  pause (SIGINT keeps `.part` files), resume (`--continue`) and cancel (delete folder)
+  are isolated per download. Flux moves the finished file into place itself.
+- Flux asks for machine-readable output (`--progress-template`, `--print`) instead of
+  scraping the human progress bar. The URL is passed after `--` so it can't be read as
+  an option.
+- Links are routed by host; any "file" link that answers with `text/html` is retried
+  through yt-dlp, so pages from unknown sites work too.
