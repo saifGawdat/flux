@@ -129,8 +129,10 @@ public enum MediaProbe {
 
         var total: Int64 = 0
         var complete = true
+        var sourceKbps: Double?
         for id in f[0].split(separator: "+").map(String.init) {
             guard let size = page.formats[id] else { complete = false; break }
+            if let tbr = size.tbr { sourceKbps = (sourceKbps ?? 0) + tbr }
             if let exact = size.filesize {
                 total += exact
             } else if let approx = size.filesizeApprox {
@@ -149,8 +151,12 @@ public enum MediaProbe {
 
         if hasFFmpeg && format == .mp3 {
             option.fileExtension = "mp3"
-            // LAME V0 (--audio-quality 0) averaged ~230 kbit/s on YouTube speech/music.
-            if let duration = page.duration { option.bytes = Int64(duration * 230_000 / 8) }
+            // LAME V0 is variable bitrate and follows the source: measured on YouTube,
+            // 106 kbit/s Opus → 139 kbit/s MP3 and 152 → 226, so ~1.4× the source.
+            if let duration = page.duration {
+                let kbps = sourceKbps.map { min(max($0 * 1.4, 96), 245) } ?? 192
+                option.bytes = Int64(duration * kbps * 1000 / 8)
+            }
             option.isEstimate = true
         } else if hasFFmpeg && format == .m4a {
             option.fileExtension = "m4a"

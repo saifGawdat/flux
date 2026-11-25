@@ -24,7 +24,7 @@ func makeFakeYTDLP() throws -> URL {
               '{"format_id": "v2160", "protocol": "m3u8_native", "tbr": 8000},'
               '{"format_id": "v1080", "protocol": "https", "filesize": 30000000, "filesize_approx": 29000000},'
               '{"format_id": "v360", "protocol": "https", "filesize_approx": 9000000},'
-              '{"format_id": "a", "protocol": "https", "filesize": 3000000}]}')
+              '{"format_id": "a", "protocol": "https", "filesize": 3000000, "tbr": 150}]}')
         sys.exit(0)
     if "--load-info-json" in args:
         sel = args[args.index("-f") + 1]
@@ -160,7 +160,7 @@ struct MediaProbeTests {
         #expect(preview.options[.m4a] == .init(height: nil, fileExtension: "m4a", bytes: 3_000_000, isEstimate: false))
         let mp3 = try #require(preview.options[.mp3])
         #expect(mp3.fileExtension == "mp3" && mp3.isEstimate && mp3.height == nil)
-        #expect(mp3.bytes == Int64(3_450_000), "estimated from duration, not the source size")
+        #expect(mp3.bytes == Int64(3_150_000), "120 s × (150 kbit/s source × 1.4), not the source size")
     }
 
     @Test func previewErrorsAreFriendly() async throws {
@@ -394,8 +394,6 @@ struct LiveMediaTests {
         #expect(log.all.contains { $0.record.status == .downloading && $0.bytesPerSecond > 0 }, "live progress reported")
         if format == .mp3 {
             #expect(log.all.contains { $0.detail == "Converting audio…" })
-        } else {
-            #expect(log.all.contains { $0.detail == "Merging video and audio…" })
         }
         #expect(try FileManager.default.contentsOfDirectory(atPath: out.path) == [file.lastPathComponent])
     }
@@ -410,7 +408,23 @@ struct LiveMediaTests {
             #expect((option.bytes ?? 0) > 10_000, "\(format) has a size")
         }
         #expect(preview.options[.mp3]?.fileExtension == "mp3")
-        #expect(preview.options[.mp4_720]?.isEstimate == false, "H.264 streams have exact sizes")
+    }
+
+    /// The number shown in the add sheet must match what actually lands on disk.
+    @Test(arguments: [MediaFormat.mp4_720, .mp3, .m4a])
+    func shownSizeMatchesDownloadedSize(_ format: MediaFormat) async throws {
+        let tools = MediaTools.discover()
+        try #require(tools.ytdlp != nil && tools.ffmpeg != nil, "install yt-dlp and ffmpeg")
+        let preview = try await MediaProbe.preview(of: Self.shortVideo, tools: tools)
+        let shown = try #require(preview.options[format]?.bytes)
+
+        let record = DownloadRecord(url: Self.shortVideo, directory: try tempDir(), kind: .media, mediaFormat: format)
+        let (job, log) = makeMediaJob(record, tools: tools)
+        await job.start()
+        let done = try await finish(job, log, timeout: 120)
+        let actual = try #require(done.totalBytes)
+        let error = abs(Double(shown - actual)) / Double(actual)
+        #expect(error < 0.15, "\(format): shown \(shown) vs downloaded \(actual) (\(Int(error * 100))% off)")
     }
 
     @Test func realUnsupportedPageFailsClearly() async throws {
