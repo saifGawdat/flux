@@ -42,6 +42,13 @@ struct PersistenceTests {
         record.checksum = Checksum(algorithm: .sha256, hex: String(repeating: "c", count: 64))
         record.checksumVerified = true
         record.sizeVerified = true
+        record.autoFile = true
+        record.filedBy = "rule “Taxes”"
+        record.contentHash = String(repeating: "d", count: 64)
+        record.duplicateOf = URL(fileURLWithPath: "/tmp/dl/original.zip")
+        record.extractedPath = URL(fileURLWithPath: "/tmp/dl/custom")
+        record.extractionError = "password"
+        record.isArchived = true
 
         try await db.save(record)
         try await db.save(record) // upsert, not duplicate

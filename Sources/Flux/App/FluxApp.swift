@@ -34,6 +34,8 @@ struct FluxApp: App {
                     .keyboardShortcut("l", modifiers: [.command, .option])
                 Divider()
                 Button("Clear Completed") { model.clearCompleted() }
+                    .help("Moves finished downloads to History")
+                    .keyboardShortcut("k", modifiers: [.command, .shift])
             }
         }
 

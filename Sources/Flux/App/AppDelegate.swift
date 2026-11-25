@@ -46,6 +46,20 @@ enum WindowSnapshot {
                             dark: env["FLUX_SNAPSHOT_DARK"] == "1") { AddDownloadSheet(initialText: link) }
             return
         }
+        if let view = env["FLUX_SNAPSHOT_VIEW"], let path = env["FLUX_SNAPSHOT"] {
+            // "organize": Settings › Organize; "history": the History list.
+            renderOffscreen(to: path, width: view == "history" ? 760 : 540, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 3,
+                            dark: env["FLUX_SNAPSHOT_DARK"] == "1") {
+                Group {
+                    if view == "history" {
+                        HistoryView(search: "", selection: .constant([])).frame(height: 520)
+                    } else {
+                        OrganizeSettings()
+                    }
+                }
+            }
+            return
+        }
         if let index = env["FLUX_SNAPSHOT_INFO"].flatMap(Int.init), let path = env["FLUX_SNAPSHOT"] {
             let editLink = env["FLUX_SNAPSHOT_EDITLINK"] == "1"
             renderOffscreen(to: path, width: 560, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 3,
@@ -62,14 +76,14 @@ enum WindowSnapshot {
         Task {
             try? await Task.sleep(for: .seconds(3))
             let model = AppModel.shared
-            for item in model.downloads { // ImageRenderer doesn't run .task: preload previews
+            for item in model.current { // ImageRenderer doesn't run .task: preload previews
                 let r = item.record
                 _ = await ThumbnailLoader.shared.image(
                     localFile: r.status == .completed && item.fileExists ? r.finalPath : nil,
                     remote: r.previewImageURLs, size: DownloadThumbnail.size)
             }
             let scene = VStack(alignment: .leading, spacing: 0) {
-                ForEach(model.downloads) { item in
+                ForEach(model.current) { item in
                     if let group = item.record.group, model.members(of: group.id).first?.id == item.id {
                         GroupHeaderRow(group: group, members: model.members(of: group.id),
                                        isCollapsed: false, onToggle: {}, onSelect: {})

@@ -141,3 +141,21 @@ which does stop socket reads. Overshoot is at most one chunk per connection.
 - Editing link, mirrors or checksum of a running download pauses it, rebuilds its job from
   the edited record and resumes; new-link validators are cleared and the size check guards
   the kept data.
+
+### D12 — Organizing happens after a download finishes
+Filing, duplicate checks and extraction run in `DownloadManager.finishUp` once a job reports
+`completed`, in that order, never inside the engine:
+- The real file name is only certain at the end (Content-Disposition, yt-dlp titles), and
+  the part file must stay on the volume where it was preallocated. Moving afterwards with
+  `renamex_np(RENAME_EXCL)` (copy + remove across volumes) keeps the never-overwrite rule.
+- Only downloads whose folder was Flux's default (`autoFile`) are moved; a folder the user
+  picked, including a playlist's folder, is final.
+- None of these steps can turn a finished download into a failure: problems are recorded
+  (`extractionError`) and shown, with a retry.
+- Extraction uses the system `bsdtar` (`--no-mac-metadata`, `__MACOSX` excluded) into a
+  private `.flux-extract-*` folder; bsdtar refuses `..`/absolute entries and writing through
+  symlinks by default, and symlinks pointing outside the folder are deleted before anything
+  is moved into place. Extracted files get the same quarantine as the archive.
+- `finishing` is marked synchronously in `apply` before any `await`, so no observer sees a
+  finished download that hasn't started its post-processing.
+- History is the same table: `archived` rows are hidden from the list, not deleted.

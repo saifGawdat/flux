@@ -24,6 +24,22 @@ public struct FluxSettings: Codable, Sendable, Equatable {
     ]
     public static let minimumSpeedLimit: Int64 = 10_000
 
+    /// Finished downloads go into Documents, Images, Videos, … inside the download folder.
+    public var sortIntoCategoryFolders: Bool
+    /// Checked in order when a download finishes; the first match decides the folder.
+    public var rules: [DownloadRule]
+    public var extractArchives: Bool
+    /// After a successful extraction, move the archive itself to the Trash.
+    public var trashArchivesAfterExtracting: Bool
+    public var duplicateAction: DuplicateAction
+
+    public enum DuplicateAction: String, Codable, Sendable, CaseIterable {
+        /// Keep the new copy and mark it as a duplicate.
+        case keepBoth
+        /// Move the new copy to the Trash; the existing file stays.
+        case trashNew
+    }
+
     public static var defaultDownloadDirectory: URL {
         FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads", isDirectory: true)
@@ -36,7 +52,12 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         resumeOnLaunch: Bool = true,
         defaultMediaFormat: MediaFormat = .best,
         speedLimitEnabled: Bool = false,
-        speedLimit: Int64 = 1_000_000
+        speedLimit: Int64 = 1_000_000,
+        sortIntoCategoryFolders: Bool = false,
+        rules: [DownloadRule] = [],
+        extractArchives: Bool = false,
+        trashArchivesAfterExtracting: Bool = false,
+        duplicateAction: DuplicateAction = .keepBoth
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConcurrentDownloads = maxConcurrentDownloads
@@ -45,6 +66,11 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         self.defaultMediaFormat = defaultMediaFormat
         self.speedLimitEnabled = speedLimitEnabled
         self.speedLimit = speedLimit
+        self.sortIntoCategoryFolders = sortIntoCategoryFolders
+        self.rules = rules
+        self.extractArchives = extractArchives
+        self.trashArchivesAfterExtracting = trashArchivesAfterExtracting
+        self.duplicateAction = duplicateAction
     }
 
     /// Tolerates missing keys so older stored settings keep working after upgrades.
@@ -58,6 +84,11 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         defaultMediaFormat = (try? c.decodeIfPresent(MediaFormat.self, forKey: .defaultMediaFormat)) ?? defaults.defaultMediaFormat
         speedLimitEnabled = try c.decodeIfPresent(Bool.self, forKey: .speedLimitEnabled) ?? defaults.speedLimitEnabled
         speedLimit = try c.decodeIfPresent(Int64.self, forKey: .speedLimit) ?? defaults.speedLimit
+        sortIntoCategoryFolders = try c.decodeIfPresent(Bool.self, forKey: .sortIntoCategoryFolders) ?? defaults.sortIntoCategoryFolders
+        rules = (try? c.decodeIfPresent([DownloadRule].self, forKey: .rules)) ?? defaults.rules
+        extractArchives = try c.decodeIfPresent(Bool.self, forKey: .extractArchives) ?? defaults.extractArchives
+        trashArchivesAfterExtracting = try c.decodeIfPresent(Bool.self, forKey: .trashArchivesAfterExtracting) ?? defaults.trashArchivesAfterExtracting
+        duplicateAction = (try? c.decodeIfPresent(DuplicateAction.self, forKey: .duplicateAction)) ?? defaults.duplicateAction
     }
 
     /// Clamps values into supported ranges.

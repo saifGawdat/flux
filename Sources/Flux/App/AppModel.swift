@@ -126,6 +126,14 @@ final class AppModel {
 
     func item(_ id: UUID) -> DownloadItemModel? { index[id] }
 
+    /// The Downloads list: everything not yet cleared into History.
+    var current: [DownloadItemModel] { downloads.filter { !$0.record.isArchived } }
+    /// Cleared downloads, newest first.
+    var history: [DownloadItemModel] {
+        downloads.filter(\.record.isArchived)
+            .sorted { ($0.record.completedAt ?? $0.record.createdAt) > ($1.record.completedAt ?? $1.record.createdAt) }
+    }
+
     var activeCount: Int { downloads.lazy.filter { $0.record.status.isActive }.count }
     var queuedCount: Int { downloads.lazy.filter { $0.record.status == .queued }.count }
     var totalSpeed: Double { downloads.reduce(0) { $0 + $1.bytesPerSecond } }
@@ -176,7 +184,33 @@ final class AppModel {
 
     /// Downloads that belong to one playlist or gallery, in playlist order.
     func members(of group: UUID) -> [DownloadItemModel] {
-        downloads.filter { $0.record.group?.id == group }
+        downloads.filter { $0.record.group?.id == group && !$0.record.isArchived }
+    }
+
+    func archive(_ ids: Set<UUID>) { perform { await $0.archive(ids) } }
+    func clearHistory() { perform { try await $0.clearHistory() } }
+    func extract(_ id: UUID) { perform { try await $0.extract(id) } }
+
+    /// Adds a fresh download of the same link (from History or a finished row).
+    func downloadAgain(_ ids: Set<UUID>) {
+        let requests = downloads.filter { ids.contains($0.id) }.map { item in
+            DownloadManager.NewDownload(
+                url: item.record.url, kind: item.record.kind, mediaFormat: item.record.mediaFormat,
+                title: item.record.title, referer: item.record.referer, mirrors: item.record.mirrors,
+                checksum: item.record.checksum)
+        }
+        add(requests)
+    }
+
+    /// A finished, still existing download of this link, if any.
+    func existingDownload(of url: URL) -> DownloadItemModel? {
+        downloads.first { $0.record.url == url && $0.record.status == .completed && $0.fileExists }
+    }
+
+    func reveal(_ url: URL) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
     }
 
     // MARK: Engine settings per download
@@ -214,8 +248,9 @@ final class AppModel {
 
     func toggleGlobalSpeedLimit() { setGlobalSpeedLimit(enabled: !settings.speedLimitEnabled) }
 
+    /// Moves finished downloads from the list into History.
     func clearCompleted() {
-        remove(Set(downloads.filter { $0.record.status == .completed }.map(\.id)), trashFiles: false)
+        archive(Set(current.filter { $0.record.status == .completed }.map(\.id)))
     }
 
     func updateSettings(_ change: (inout FluxSettings) -> Void) {
@@ -280,6 +315,8 @@ final class AppModel {
     func reveal(_ item: DownloadItemModel) {
         if let path = item.record.finalPath, item.fileExists {
             NSWorkspace.shared.activateFileViewerSelecting([path])
+        } else if let extracted = item.record.extractedPath, FileManager.default.fileExists(atPath: extracted.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([extracted])
         } else if let part = item.record.partFileURL, FileManager.default.fileExists(atPath: part.path) {
             NSWorkspace.shared.activateFileViewerSelecting([part])
         } else {

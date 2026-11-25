@@ -30,16 +30,27 @@ enum StatusFilter: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// What the sidebar shows: a status filter, a kind of file, or History.
+enum SidebarItem: Hashable {
+    case status(StatusFilter)
+    case category(FileCategory)
+    case history
+}
+
 struct DownloadsView: View {
     @Environment(AppModel.self) private var model
-    @State private var filter: StatusFilter? = .all
+    @State private var sidebar: SidebarItem? = .status(.all)
     @State private var selection = Set<UUID>()
     @State private var search = ""
 
     private var visible: [DownloadItemModel] {
-        let filter = filter ?? .all
-        return model.downloads.filter { item in
-            filter.matches(item.record.status) && (search.isEmpty || item.record.matches(search))
+        model.current.filter { item in
+            let shown = switch sidebar ?? .status(.all) {
+            case .status(let filter): filter.matches(item.record.status)
+            case .category(let category): item.record.category == category
+            case .history: false
+            }
+            return shown && (search.isEmpty || item.record.matches(search))
         }
     }
 
@@ -48,20 +59,43 @@ struct DownloadsView: View {
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            List(selection: $filter) {
+            List(selection: $sidebar) {
                 Section("Downloads") {
                     ForEach(StatusFilter.allCases) { f in
                         Label(f.title, systemImage: f.systemImage)
-                            .badge(model.downloads.lazy.filter { f.matches($0.record.status) }.count)
-                            .tag(f)
+                            .badge(model.current.lazy.filter { f.matches($0.record.status) }.count)
+                            .tag(SidebarItem.status(f))
                     }
+                }
+                let counts = Dictionary(grouping: model.current, by: \.record.category).mapValues(\.count)
+                if !counts.isEmpty {
+                    Section("Kinds") {
+                        ForEach(FileCategory.allCases.filter { counts[$0] != nil }) { category in
+                            Label(category.title, systemImage: category.systemImage)
+                                .badge(counts[category] ?? 0)
+                                .tag(SidebarItem.category(category))
+                        }
+                    }
+                }
+                Section {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                        .badge(model.history.count)
+                        .tag(SidebarItem.history)
                 }
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
         } detail: {
-            DownloadList(items: visible, selection: $selection, emptyFilter: filter ?? .all, isSearching: !search.isEmpty)
-                .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
+            Group {
+                if sidebar == .history {
+                    HistoryView(search: search, selection: $selection)
+                } else {
+                    DownloadList(items: visible, selection: $selection, emptyFilter: statusFilter,
+                                 category: category, isSearching: !search.isEmpty)
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
         }
+        .onChange(of: sidebar) { selection = [] }
         .searchable(text: $search, placement: .toolbar, prompt: "Search downloads")
         .toolbar { toolbar }
         // In full screen macOS hosts the toolbar in its own strip with an opaque backdrop
@@ -116,9 +150,19 @@ struct DownloadsView: View {
         }
     }
 
+    private var statusFilter: StatusFilter {
+        if case .status(let filter) = sidebar { return filter }
+        return .all
+    }
+
+    private var category: FileCategory? {
+        if case .category(let category) = sidebar { return category }
+        return nil
+    }
+
     private var subtitle: String {
         let active = model.activeCount
-        guard active > 0 else { return "\(model.downloads.count) downloads" }
+        guard active > 0 else { return "\(model.current.count) downloads" }
         return "\(active) active · \(Format.speed(model.totalSpeed))"
     }
 }
@@ -128,6 +172,7 @@ struct DownloadList: View {
     let items: [DownloadItemModel]
     @Binding var selection: Set<UUID>
     let emptyFilter: StatusFilter
+    var category: FileCategory? = nil
     let isSearching: Bool
     /// Groups the user opened or closed (big groups start closed, small ones open).
     @State private var toggledGroups: Set<UUID> = []
@@ -148,7 +193,7 @@ struct DownloadList: View {
 
     private func isCollapsed(_ group: DownloadGroup, count: Int) -> Bool {
         // While filtering or searching, show the matches instead of hiding them.
-        guard emptyFilter == .all, !isSearching else { return false }
+        guard emptyFilter == .all, category == nil, !isSearching else { return false }
         return (count > Self.collapseAbove) != toggledGroups.contains(group.id)
     }
 
@@ -221,6 +266,8 @@ struct DownloadList: View {
     private var emptyState: some View {
         if isSearching {
             ContentUnavailableView.search
+        } else if let category {
+            ContentUnavailableView("No \(category.title)", systemImage: category.systemImage)
         } else if emptyFilter == .all {
             ContentUnavailableView {
                 Label("No Downloads Yet", systemImage: "icloud.and.arrow.down")
@@ -251,6 +298,14 @@ struct DownloadContextMenu: View {
             if single.record.status != .completed {
                 Button("Update Link…") { model.showInfo(single.id, editLink: true) }
             }
+            if let extracted = single.record.extractedPath {
+                Button("Show Extracted Files") { model.reveal(extracted) }
+            } else if single.fileExists, let file = single.record.finalPath, ArchiveExtractor.canExtract(file) {
+                Button("Extract") { model.extract(single.id) }
+            }
+            if let original = single.record.duplicateOf {
+                Button("Show Existing Copy") { model.reveal(original) }
+            }
             Divider()
         }
         if targets.contains(where: { $0.record.status.canResume }) {
@@ -277,6 +332,9 @@ struct DownloadContextMenu: View {
         }
         Button(targets.count == 1 ? "Copy Link" : "Copy Links") { model.copyLinks(ids) }
         Divider()
+        if targets.contains(where: { [.completed, .failed, .cancelled].contains($0.record.status) }) {
+            Button("Move to History") { model.archive(ids) }
+        }
         Button("Remove from List") { model.remove(ids, trashFiles: false) }
         if targets.contains(where: { $0.record.status == .completed && $0.fileExists }) {
             Button("Move File to Trash", role: .destructive) { model.remove(ids, trashFiles: true) }

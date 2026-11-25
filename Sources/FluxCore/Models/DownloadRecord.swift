@@ -116,6 +116,21 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
     /// The server stated the file size up front and the finished file has exactly that
     /// many bytes. False when the server never said how big the file is.
     public var sizeVerified = false
+    /// The folder was Flux's default, not the user's choice: rules and category folders
+    /// may move the finished file.
+    public var autoFile = false
+    /// What moved the finished file ("rule “Invoices”", "Videos"), for display.
+    public var filedBy: String?
+    /// SHA-256 of the finished file, once Flux has computed it.
+    public var contentHash: String?
+    /// An identical file that already existed when this download finished.
+    public var duplicateOf: URL?
+    /// What extracting this archive produced.
+    public var extractedPath: URL?
+    /// Why extracting this archive failed (the download itself is fine).
+    public var extractionError: String?
+    /// Cleared from the Downloads list; still listed in History.
+    public var isArchived = false
 
     public init(
         id: UUID = UUID(),
@@ -164,7 +179,8 @@ public struct DownloadRecord: Codable, Sendable, Identifiable, Equatable {
 
     /// Search: name, media title, playlist/gallery title or link.
     public func matches(_ query: String) -> Bool {
-        [fileName, title ?? "", group?.title ?? "", url.absoluteString].contains { $0.localizedCaseInsensitiveContains(query) }
+        [fileName, title ?? "", group?.title ?? "", url.absoluteString, referer?.host() ?? ""]
+            .contains { $0.localizedCaseInsensitiveContains(query) }
     }
 
     /// List order: newest first; downloads of one group stay in playlist order.

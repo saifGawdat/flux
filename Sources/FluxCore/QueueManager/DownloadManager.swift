@@ -97,6 +97,8 @@ public actor DownloadManager {
     private var jobs: [UUID: JobHandle] = [:]
     private var lastSequence: [UUID: UInt64] = [:]
     private var subscribers: [UUID: AsyncStream<Event>.Continuation] = [:]
+    /// Finished downloads being filed, checked for duplicates or extracted.
+    private var finishing: Set<UUID> = []
     private var isStarted = false
     public private(set) var settings: FluxSettings
 
@@ -195,6 +197,8 @@ public actor DownloadManager {
             record.mirrors = request.mirrors.filter { $0 != request.url }
             record.checksum = request.checksum
             record.speedLimit = request.speedLimit.flatMap { $0 > 0 ? $0 : nil }
+            // Only Flux's own choice of folder may be changed by rules and categories.
+            record.autoFile = request.directory == nil
             records.append(record)
         }
         try await database.save(records)
@@ -286,6 +290,24 @@ public actor DownloadManager {
             await update(id) { $0.priority = priority }
         }
         await schedule()
+    }
+
+    // MARK: - History
+
+    /// Takes downloads off the Downloads list; they stay in History. Only finished,
+    /// failed or cancelled downloads can be archived.
+    public func archive(_ ids: some Collection<UUID>) async {
+        for id in ids {
+            guard let status = items[id]?.record.status, status == .completed || status == .failed || status == .cancelled
+            else { continue }
+            await update(id) { $0.isArchived = true }
+        }
+    }
+
+    /// Forgets everything in History. Files on disk are kept.
+    public func clearHistory() async throws {
+        let ids = items.values.filter(\.record.isArchived).map(\.id)
+        try await remove(ids, trashFiles: false)
     }
 
     /// Caps the speed of individual downloads (nil removes the cap). Applies immediately.
@@ -465,10 +487,12 @@ public actor DownloadManager {
             bytesPerSecond: record.status.isActive ? snapshot.bytesPerSecond : 0,
             activeConnections: snapshot.activeConnections,
             detail: record.status.isActive ? snapshot.detail : nil)
+        let statusChanged = current.record.status != record.status
+        // Marked before any await, so nobody sees "finished" before filing has begun.
+        let startFinishing = statusChanged && record.status == .completed && finishing.insert(id).inserted
         items[id] = item
         broadcast(.updated(item))
 
-        let statusChanged = current.record.status != record.status
         if statusChanged || snapshot.isCheckpoint {
             await persist(record)
         }
@@ -476,7 +500,102 @@ public actor DownloadManager {
             if record.status == .completed || record.status == .cancelled { dropJob(id) }
             await schedule()
         }
+        if startFinishing {
+            Task { await self.finishUp(id) }
+        }
     }
+
+    // MARK: - After a download finishes
+
+    /// Files the download (rules, category folders), looks for an identical existing file,
+    /// and extracts archives, in that order. Each step is optional and none of them can
+    /// make a finished download fail: problems are recorded and shown instead.
+    private func finishUp(_ id: UUID) async {
+        defer {
+            finishing.remove(id)
+            showDetail(id, nil)
+        }
+        guard let record = items[id]?.record, record.status == .completed, var file = record.finalPath else { return }
+
+        if record.autoFile, let destination = Filing.destination(for: record, settings: settings),
+           destination.folder.standardizedFileURL.path != file.deletingLastPathComponent().standardizedFileURL.path {
+            showDetail(id, "Moving to \(destination.folder.lastPathComponent)…")
+            do {
+                let moved = try await FileMover.move(file, into: destination.folder)
+                file = moved
+                await update(id) {
+                    $0.finalPath = moved
+                    $0.directory = destination.folder
+                    $0.fileName = moved.lastPathComponent
+                    $0.filedBy = destination.reason
+                }
+            } catch {
+                Log.manager.error("Couldn't move \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        let known: [(url: URL, sha256: String?)] = items.values.compactMap { other in
+            guard other.id != id, other.record.status == .completed, let path = other.record.finalPath,
+                  other.record.totalBytes == record.totalBytes else { return nil }
+            return (path, other.record.contentHash)
+        }
+        showDetail(id, "Checking for duplicates…")
+        if let match = try? await DuplicateFinder.findDuplicate(of: file, known: known) {
+            let trash = settings.duplicateAction == .trashNew
+            if trash { try? FileManager.default.trashItem(at: file, resultingItemURL: nil) }
+            await update(id) {
+                $0.duplicateOf = match.existing
+                $0.contentHash = match.sha256
+                if trash { $0.finalPath = nil }
+            }
+            if trash { return }
+        }
+
+        if settings.extractArchives, ArchiveExtractor.canExtract(file) {
+            showDetail(id, "Extracting…")
+            do {
+                let output = try await ArchiveExtractor.extract(file, source: record.url)
+                let trashArchive = settings.trashArchivesAfterExtracting
+                if trashArchive { try? FileManager.default.trashItem(at: file, resultingItemURL: nil) }
+                await update(id) {
+                    $0.extractedPath = output
+                    $0.extractionError = nil
+                    if trashArchive { $0.finalPath = nil }
+                }
+            } catch {
+                await update(id) { $0.extractionError = error.localizedDescription }
+            }
+        }
+    }
+
+    /// Re-runs extraction for a finished archive (e.g. after a failure, or on demand).
+    public func extract(_ id: UUID) async throws {
+        guard let record = items[id]?.record, let file = record.finalPath,
+              FileManager.default.fileExists(atPath: file.path) else { throw FluxError.fileMissing }
+        showDetail(id, "Extracting…")
+        defer { showDetail(id, nil) }
+        do {
+            let output = try await ArchiveExtractor.extract(file, source: record.url)
+            await update(id) {
+                $0.extractedPath = output
+                $0.extractionError = nil
+            }
+        } catch {
+            await update(id) { $0.extractionError = error.localizedDescription }
+            throw error
+        }
+    }
+
+    /// Shows a stage ("Extracting…") on a download without saving anything.
+    private func showDetail(_ id: UUID, _ text: String?) {
+        guard var item = items[id], item.detail != text else { return }
+        item.detail = text
+        items[id] = item
+        broadcast(.updated(item))
+    }
+
+    /// True while a finished download is still being filed, checked or extracted.
+    public func isFinishing(_ id: UUID) -> Bool { finishing.contains(id) }
 
     /// A "file" link turned out to be a web page: hand it to the media extractor.
     private func switchToMedia(_ id: UUID) async {

@@ -272,6 +272,33 @@ private struct DownloadInfoForm: View {
                     .monospacedDigit()
                     .textSelection(.enabled)
             }
+            if let filedBy = record.filedBy {
+                LabeledContent("Organized") { Text(DownloadRow.filedText(filedBy)).foregroundStyle(.secondary) }
+            }
+            if let duplicate = record.duplicateOf {
+                LabeledContent("Duplicate of") {
+                    HStack {
+                        Text((duplicate.path as NSString).abbreviatingWithTildeInPath)
+                            .lineLimit(1).truncationMode(.middle).foregroundStyle(.orange)
+                        Button("Show") { model.reveal(duplicate) }.controlSize(.small)
+                    }
+                }
+            }
+            if let extracted = record.extractedPath {
+                LabeledContent("Extracted to") {
+                    HStack {
+                        Text(extracted.lastPathComponent).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                        Button("Show") { model.reveal(extracted) }.controlSize(.small)
+                    }
+                }
+            } else if let problem = record.extractionError {
+                LabeledContent("Extraction") {
+                    HStack {
+                        Text(problem).foregroundStyle(.orange).lineLimit(2)
+                        Button("Try Again") { model.extract(item.id) }.controlSize(.small)
+                    }
+                }
+            }
             if isFile {
                 LabeledContent("Size check") {
                     Label(sizeCheck.text, systemImage: sizeCheck.icon)

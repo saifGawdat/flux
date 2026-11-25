@@ -89,9 +89,22 @@ struct DownloadRow: View {
                 ? " · server can’t resume, will restart" : ""
             return "Paused · \(amount)\(percent)\(note)"
         case .completed:
+            if let detail = item.detail { return detail } // "Extracting…" etc.
             let size = Format.bytes(record.totalBytes ?? record.receivedBytes)
             let date = record.completedAt?.formatted(date: .abbreviated, time: .shortened) ?? ""
-            return item.fileExists ? "\(size) · \(host) · \(date)" : "\(size) · File moved or deleted"
+            var parts = [size]
+            if let duplicate = record.duplicateOf {
+                parts.append(item.fileExists ? "Same as \(duplicate.lastPathComponent)" : "Already had it as \(duplicate.lastPathComponent)")
+            } else if !item.fileExists, record.extractedPath == nil {
+                parts.append("File moved or deleted")
+            } else {
+                parts.append(host)
+            }
+            if let filedBy = record.filedBy { parts.append(Self.filedText(filedBy)) }
+            if let extracted = record.extractedPath { parts.append("Extracted to \(extracted.lastPathComponent)") }
+            if let problem = record.extractionError { parts.append("Not extracted: \(problem)") }
+            parts.append(date)
+            return parts.joined(separator: " · ")
         case .failed:
             return "Failed: \(record.errorMessage ?? "Unknown error")"
         case .cancelled:
@@ -129,6 +142,11 @@ struct DownloadRow: View {
 }
 
 extension DownloadRow {
+    /// "Moved by rule “Invoices”" or "Sorted into Documents".
+    static func filedText(_ filedBy: String) -> String {
+        filedBy.hasPrefix("rule ") ? "Moved by \(filedBy)" : "Sorted into \(filedBy)"
+    }
+
     /// A failed file download with data worth keeping: a fresh link can pick it up.
     var canContinueFromNewLink: Bool {
         record.status == .failed && record.kind == .file && record.receivedBytes > 0 && record.supportsRanges

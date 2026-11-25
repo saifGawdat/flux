@@ -65,9 +65,24 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
   CDN) no longer restart multi-connection downloads from scratch.
 - Not yet: per-host connection limits, scheduled speed limits (Phase 4 schedules).
 
-## Phase 3 — Smart management ⬜
-Category folders, rule engine (extension / pattern / domain / size / category),
-duplicate detection (size + hash), archive extraction, history view.
+## Phase 3 — Smart management ✅
+
+- Categories ✅: Documents, Images, Videos, Music, Archives, Apps, Other (by extension;
+  media by format). Optional folders by kind; sidebar "Kinds" filter with counts.
+- Rule engine ✅: conditions extension (incl. `tar.gz`), name glob, site (with subdomains and
+  the page a link came from), link contains, larger/smaller than, kind; all must match;
+  ordered, first match wins; enable/disable, reorder, edit in Settings › Organize. Applied
+  when a download finishes, so names from Content-Disposition count. Only downloads saved
+  to Flux's default folder are moved (`autoFile`).
+- Duplicate detection ✅: same size, then SHA-256, against earlier downloads and files in
+  the same folder; keep both (marked) or trash the new copy. Same-link warning in the add sheet.
+- Archive extraction ✅: system bsdtar (zip, tar.*, 7z, rar), private work folder, single
+  top-level item placed as is, else a folder named after the archive; unsafe symlinks
+  removed; quarantine propagated; optional trash of the archive; Extract / Try Again.
+- History ✅: Clear Completed archives instead of deleting; History view grouped by day,
+  search, Download Again, Remove, Clear History.
+- Not yet: watching folders for files added outside Flux, renaming rules, per-rule
+  actions beyond the folder.
 
 ## Phase 4 — Power user ⬜
 TXT/CSV/JSON import & export, multiple named queues with schedules, clipboard

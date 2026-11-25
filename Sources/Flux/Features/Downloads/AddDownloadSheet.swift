@@ -43,6 +43,9 @@ struct AddDownloadSheet: View {
     private var effectiveDirectory: URL { directory ?? model.settings.downloadDirectory }
     private var effectiveFormat: MediaFormat { mediaFormat ?? model.settings.defaultMediaFormat }
     private var hasMediaLinks: Bool { urls.contains(where: MediaRouting.prefersMedia) }
+    private var organizes: Bool { model.settings.sortIntoCategoryFolders || model.settings.rules.contains(where: \.isEnabled) }
+    /// Links that were already downloaded and whose file still exists.
+    private var alreadyDownloaded: [DownloadItemModel] { urls.compactMap(model.existingDownload(of:)) }
 
     /// Plain file links (nothing found to choose from), where mirrors and checksums apply.
     private var isPlainFiles: Bool { activeChoice == nil && !urls.isEmpty && !hasMediaLinks && !isLoading }
@@ -158,6 +161,18 @@ struct AddDownloadSheet: View {
                 }
                 if hasMediaLinks && model.mediaTools.ytdlp == nil {
                     MissingToolsNotice()
+                }
+                if let first = alreadyDownloaded.first {
+                    HStack(spacing: 6) {
+                        Label(alreadyDownloaded.count == 1
+                              ? "Already downloaded: \(first.record.fileName), \(first.record.completedAt?.formatted(date: .abbreviated, time: .omitted) ?? "")"
+                              : "\(alreadyDownloaded.count) of these links were already downloaded",
+                              systemImage: "doc.on.doc")
+                            .foregroundStyle(.orange)
+                        Button("Show") { model.reveal(first) }
+                            .controlSize(.small)
+                    }
+                    .font(.caption)
                 }
             }
         }
@@ -297,6 +312,11 @@ struct AddDownloadSheet: View {
             LabeledContent("Save to") {
                 FolderPickerButton(url: effectiveDirectory) { directory = $0 }
             }
+            if directory == nil, groupTitle == nil || !useFolder, organizes {
+                Text("When finished, your rules and folders by kind may move it (Settings › Organize).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let folder = groupTitle {
                 Toggle("Put them in a folder named “\(FileNaming.sanitize(folder))”", isOn: $useFolder)
             }
@@ -382,17 +402,18 @@ struct AddDownloadSheet: View {
 
     private var requests: [DownloadManager.NewDownload] {
         let folder = groupTitle.flatMap { useFolder ? effectiveDirectory.appendingPathComponent(FileNaming.sanitize($0), isDirectory: true) : nil }
-        let directory = folder ?? effectiveDirectory
+        // nil = Flux's default folder, which rules and folders-by-kind may change later.
+        let directory: URL? = folder ?? self.directory
         guard let url = inspectURL, let found, let choice = activeChoice else {
             if mirrorMode, let main = urls.first {
                 return [DownloadManager.NewDownload(
-                    url: main, directory: effectiveDirectory, connections: connections, priority: priority,
+                    url: main, directory: directory, connections: connections, priority: priority,
                     startImmediately: startImmediately, kind: .file, mirrors: Array(urls.dropFirst()),
                     checksum: checksum, speedLimit: speedLimit)]
             }
             return urls.map {
                 DownloadManager.NewDownload(
-                    url: $0, directory: effectiveDirectory, connections: connections, priority: priority,
+                    url: $0, directory: directory, connections: connections, priority: priority,
                     startImmediately: startImmediately, mediaFormat: mediaFormat,
                     checksum: checksum, speedLimit: speedLimit)
             }

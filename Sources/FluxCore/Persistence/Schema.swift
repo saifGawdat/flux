@@ -62,6 +62,16 @@ enum Schema {
             ALTER TABLE downloads ADD COLUMN checksum_verified INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE downloads ADD COLUMN size_verified INTEGER NOT NULL DEFAULT 0;
             """),
+        Migration(version: 6, name: "organizing and history", sql: """
+            ALTER TABLE downloads ADD COLUMN auto_file INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE downloads ADD COLUMN filed_by TEXT;
+            ALTER TABLE downloads ADD COLUMN content_hash TEXT;
+            ALTER TABLE downloads ADD COLUMN duplicate_of TEXT;
+            ALTER TABLE downloads ADD COLUMN extracted_path TEXT;
+            ALTER TABLE downloads ADD COLUMN extraction_error TEXT;
+            ALTER TABLE downloads ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+            CREATE INDEX downloads_content_hash ON downloads(content_hash);
+            """),
     ]
 
     static var latestVersion: Int { migrations.last?.version ?? 0 }

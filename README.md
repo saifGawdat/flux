@@ -6,7 +6,7 @@ A native macOS download manager for Apple Silicon, built with Swift 6, SwiftUI a
 
 ## Status
 
-Phase 1 (foundation) and Phase 2 (download engine) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
+Phases 1 (foundation), 2 (download engine) and 3 (smart management) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
 and what is next, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions.
 
 What works today:
@@ -43,6 +43,16 @@ What works today:
   checks the new link serves the same file and keeps the data already downloaded
 - Size check surfaced: finished files show whether they match the size the server stated
 - Info window (⌘I) per download: link, mirrors, checksum, size check, priority, speed limit
+- **Folders by kind** (opt-in): finished files go to Documents, Images, Videos, Music,
+  Archives or Apps inside the download folder; the sidebar filters by kind too
+- **Rules** (Settings › Organize): extension, name pattern, site, link text, size or kind →
+  folder; first match wins; folders you pick yourself are never changed
+- **Duplicates**: a finished file identical (size, then SHA-256) to one you already have is
+  marked, or its new copy moved to the Trash
+- **Archives** (opt-in): zip, tar.gz/bz2/xz, 7z and rar extracted next to the archive,
+  quarantined, never overwriting; entries that climb out of the folder are refused
+- **History**: Clear Completed (⇧⌘K) moves finished downloads to History, grouped by day,
+  with search, Download Again and Clear History
 - Downloads window with per-connection progress bars, filters, search, drag & drop of
   links, context menus, settings
 
@@ -105,6 +115,8 @@ FLUX_SNAPSHOT=/tmp/flux-dark.png FLUX_SNAPSHOT_DARK=1 build/Flux.app/Contents/Ma
 FLUX_SNAPSHOT=/tmp/add.png FLUX_SNAPSHOT_ADD="https://…" build/Flux.app/Contents/MacOS/Flux
 # the Info window of the n-th download (FLUX_SNAPSHOT_EDITLINK=1 opens Change Link):
 FLUX_SNAPSHOT=/tmp/info.png FLUX_SNAPSHOT_INFO=0 build/Flux.app/Contents/MacOS/Flux
+# Settings › Organize, or the History list:
+FLUX_SNAPSHOT=/tmp/org.png FLUX_SNAPSHOT_VIEW=organize build/Flux.app/Contents/MacOS/Flux
 ```
 
 ## Data
