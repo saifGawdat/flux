@@ -36,6 +36,18 @@ public struct FluxSettings: Codable, Sendable, Equatable {
     public var queues: [DownloadQueue]
     /// Offer to download links the user copies (always asks first).
     public var watchClipboard: Bool
+    /// Flux's icon in the menu bar, with running downloads and quick actions.
+    public var showInMenuBar: Bool
+    /// A notification when a download (or a whole playlist) finishes.
+    public var notifyWhenFinished: Bool
+    /// A notification when a download fails.
+    public var notifyOnFailure: Bool
+    /// A progress bar on the Dock icon while downloads run.
+    public var showDockProgress: Bool
+    /// Finished downloads can be found with Spotlight.
+    public var indexInSpotlight: Bool
+    /// System-wide shortcuts; an action without an entry has none.
+    public var globalShortcuts: [GlobalShortcutAction: KeyCombo]
 
     public enum DuplicateAction: String, Codable, Sendable, CaseIterable {
         /// Keep the new copy and mark it as a duplicate.
@@ -63,7 +75,13 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         trashArchivesAfterExtracting: Bool = false,
         duplicateAction: DuplicateAction = .keepBoth,
         queues: [DownloadQueue] = [],
-        watchClipboard: Bool = false
+        watchClipboard: Bool = false,
+        showInMenuBar: Bool = true,
+        notifyWhenFinished: Bool = true,
+        notifyOnFailure: Bool = true,
+        showDockProgress: Bool = true,
+        indexInSpotlight: Bool = true,
+        globalShortcuts: [GlobalShortcutAction: KeyCombo] = GlobalShortcutAction.defaults
     ) {
         self.downloadDirectory = downloadDirectory
         self.maxConcurrentDownloads = maxConcurrentDownloads
@@ -79,6 +97,12 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         self.duplicateAction = duplicateAction
         self.queues = queues
         self.watchClipboard = watchClipboard
+        self.showInMenuBar = showInMenuBar
+        self.notifyWhenFinished = notifyWhenFinished
+        self.notifyOnFailure = notifyOnFailure
+        self.showDockProgress = showDockProgress
+        self.indexInSpotlight = indexInSpotlight
+        self.globalShortcuts = globalShortcuts
     }
 
     /// Tolerates missing keys so older stored settings keep working after upgrades.
@@ -99,6 +123,13 @@ public struct FluxSettings: Codable, Sendable, Equatable {
         duplicateAction = (try? c.decodeIfPresent(DuplicateAction.self, forKey: .duplicateAction)) ?? defaults.duplicateAction
         queues = (try? c.decodeIfPresent([DownloadQueue].self, forKey: .queues)) ?? defaults.queues
         watchClipboard = try c.decodeIfPresent(Bool.self, forKey: .watchClipboard) ?? defaults.watchClipboard
+        showInMenuBar = try c.decodeIfPresent(Bool.self, forKey: .showInMenuBar) ?? defaults.showInMenuBar
+        notifyWhenFinished = try c.decodeIfPresent(Bool.self, forKey: .notifyWhenFinished) ?? defaults.notifyWhenFinished
+        notifyOnFailure = try c.decodeIfPresent(Bool.self, forKey: .notifyOnFailure) ?? defaults.notifyOnFailure
+        showDockProgress = try c.decodeIfPresent(Bool.self, forKey: .showDockProgress) ?? defaults.showDockProgress
+        indexInSpotlight = try c.decodeIfPresent(Bool.self, forKey: .indexInSpotlight) ?? defaults.indexInSpotlight
+        globalShortcuts = (try? c.decodeIfPresent([GlobalShortcutAction: KeyCombo].self, forKey: .globalShortcuts))
+            ?? defaults.globalShortcuts
     }
 
     /// Clamps values into supported ranges.
@@ -114,6 +145,14 @@ public struct FluxSettings: Codable, Sendable, Equatable {
             if queue.name.isEmpty { queue.name = "Queue" }
             queue.maxConcurrent = queue.maxConcurrent.map { max(1, $0) }
             return queue
+        }
+        // Only combinations that are safe system-wide, and one action per combination
+        // (the first in `allCases` keeps it).
+        let order = GlobalShortcutAction.allCases
+        s.globalShortcuts = s.globalShortcuts.filter { action, combo in
+            combo.isAllowedGlobally && !s.globalShortcuts.contains { other, otherCombo in
+                otherCombo == combo && order.firstIndex(of: other)! < order.firstIndex(of: action)!
+            }
         }
         return s
     }

@@ -20,6 +20,8 @@ struct FluxApp: App {
                     .keyboardShortcut("n")
                     .disabled(model.manager == nil)
                 Divider()
+                QuickLookCommand(model: model)
+                Divider()
                 Button("Import Links…") { LinkListPanels.importLinks(model) }
                     .keyboardShortcut("o")
                     .disabled(model.manager == nil)
@@ -66,6 +68,43 @@ struct FluxApp: App {
                 .environment(model)
                 .tint(FluxTheme.accent)
         }
+
+        MenuBarExtra(isInserted: Binding(
+            get: { model.settings.showInMenuBar },
+            set: { value in model.updateSettings { $0.showInMenuBar = value } }
+        )) {
+            MenuBarContent()
+                .environment(model)
+                .tint(FluxTheme.accent)
+        } label: {
+            MenuBarLabel().environment(model)
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+/// File › Quick Look (⌘Y) for the selected finished downloads; Space does the same in the list.
+struct QuickLookCommand: View {
+    // Commands don't get the window's environment.
+    let model: AppModel
+    @FocusedValue(\.downloadSelection) private var selection
+
+    var body: some View {
+        Button(model.quickLookURL == nil ? "Quick Look" : "Close Quick Look") { model.quickLook(selection ?? []) }
+            .keyboardShortcut("y")
+            .disabled(model.quickLookURL == nil && !model.canQuickLook(selection ?? []))
+    }
+}
+
+private struct DownloadSelectionKey: FocusedValueKey {
+    typealias Value = Set<UUID>
+}
+
+extension FocusedValues {
+    /// The downloads selected in the focused window.
+    var downloadSelection: Set<UUID>? {
+        get { self[DownloadSelectionKey.self] }
+        set { self[DownloadSelectionKey.self] = newValue }
     }
 }
 

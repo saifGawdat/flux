@@ -2,6 +2,7 @@ import AppKit
 import FluxCore
 import Foundation
 import Observation
+import UserNotifications
 
 /// Main-actor view state for one download. Rows observe only their own item.
 @MainActor @Observable
@@ -33,6 +34,13 @@ final class DownloadItemModel: Identifiable {
     var fileExists: Bool {
         record.finalPath.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
+
+    /// What Quick Look shows: the finished file, else what extracting it produced.
+    var previewFile: URL? {
+        guard record.status == .completed else { return nil }
+        return [record.finalPath, record.extractedPath].compactMap { $0 }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
 }
 
 struct AddSheetRequest: Identifiable {
@@ -51,6 +59,12 @@ struct ImportRequest: Identifiable {
 struct QueueEditorRequest: Identifiable {
     let id = UUID()
     var queue: DownloadQueue?
+}
+
+/// Shows downloads in the window (from Spotlight, a notification, the menu bar).
+struct FocusRequest: Equatable {
+    let id = UUID()
+    var downloads: Set<UUID>
 }
 
 /// Opens the Info sheet for one download, optionally straight into changing its link.
@@ -84,6 +98,26 @@ final class AppModel {
     /// Where the `flux` command line connects; nil when not accepting commands.
     private(set) var controlSocket: URL?
     var errorMessage: String?
+    /// Downloads the window should select; cleared once shown.
+    var focusRequest: FocusRequest?
+    /// Quick Look: the file shown and the files the panel can page through.
+    var quickLookURL: URL?
+    private(set) var quickLookURLs: [URL] = []
+    private(set) var notificationStatus: UNAuthorizationStatus = .notDetermined
+    /// Global shortcuts the system refused because another app holds them.
+    private(set) var unavailableShortcuts: Set<GlobalShortcutAction> = []
+    let loginItem = LoginItem()
+
+    @ObservationIgnored let notifier = Notifier()
+    @ObservationIgnored private var milestones = MilestoneTracker()
+    @ObservationIgnored private let dock = DockProgress()
+    @ObservationIgnored private let spotlight = SpotlightIndexer()
+    @ObservationIgnored private var spotlightSync = SpotlightSync()
+    @ObservationIgnored private var spotlightChanges: [SpotlightSync.Change] = []
+    /// Spotlight work runs in order: a rebuild must not overtake later updates.
+    @ObservationIgnored private var spotlightTask: Task<Void, Never>?
+    @ObservationIgnored private var spotlightEnabled = false
+    @ObservationIgnored private var refreshScheduled = false
 
     @ObservationIgnored private(set) var manager: DownloadManager?
     @ObservationIgnored private var index: [UUID: DownloadItemModel] = [:]
@@ -93,7 +127,10 @@ final class AppModel {
     @ObservationIgnored var openMainWindow: (() -> Void)?
     @ObservationIgnored private(set) lazy var clipboard = ClipboardWatcher(model: self)
 
-    private init() {}
+    private init() {
+        notifier.onResponse = { [weak self] in self?.respond(to: $0) }
+        GlobalHotKeys.shared.perform = { [weak self] in self?.run($0) }
+    }
 
     // MARK: Lifecycle
 
@@ -114,6 +151,7 @@ final class AppModel {
             phase = .ready
             startControlServer(manager, separateDatabase: override != nil)
             clipboard.update(enabled: settings.watchClipboard)
+            Task { await notifier.refreshAuthorization(); notifierChanged() }
             await loadMediaTools(from: manager)
         } catch {
             phase = .failed(error.localizedDescription)
@@ -126,7 +164,15 @@ final class AppModel {
             self.settings = settings
             index = Dictionary(uniqueKeysWithValues: items.map { ($0.id, DownloadItemModel($0)) })
             downloads = items.compactMap { index[$0.id] }
+            milestones.baseline(items.map(\.record))
+            spotlightEnabled = false // rebuilt by applySystemSettings
+            applySystemSettings()
         case .updated(let item):
+            let news = milestones.observe(item.record) { [index] in index[$0]?.record }
+            if !news.isEmpty { notifier.post(news, settings: settings) }
+            if spotlightEnabled, let change = spotlightSync.update(item.record, fileExists: Self.fileExists) {
+                spotlightChanges.append(change)
+            }
             if let model = index[item.id] {
                 model.apply(item)
             } else {
@@ -139,11 +185,136 @@ final class AppModel {
             let set = Set(ids)
             for id in ids { index[id] = nil }
             downloads.removeAll { set.contains($0.id) }
+            milestones.forget(ids)
+            spotlightChanges += spotlightSync.remove(ids).map { .delete($0) }
         case .settingsChanged(let settings):
             self.settings = settings
             clipboard.update(enabled: settings.watchClipboard)
+            applySystemSettings()
         }
-        updateDockBadge()
+        scheduleRefresh()
+    }
+
+    // MARK: Menu bar, Dock, Spotlight, shortcuts
+
+    nonisolated private static func fileExists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Dock and Spotlight follow the list at most twice a second, not on every update.
+    private func scheduleRefresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            refreshScheduled = false
+            updateDockBadge()
+            dock.update(settings.showDockProgress ? OverallProgress.fraction(of: downloads.lazy.map(\.record)) : nil)
+            flushSpotlight()
+        }
+    }
+
+    private func applySystemSettings() {
+        GlobalHotKeys.shared.register(settings.globalShortcuts)
+        unavailableShortcuts = GlobalHotKeys.shared.unavailable
+        if settings.indexInSpotlight != spotlightEnabled {
+            spotlightEnabled = settings.indexInSpotlight
+            spotlightChanges = []
+            if spotlightEnabled {
+                let entries = spotlightSync.rebuild(downloads.map(\.record), fileExists: Self.fileExists)
+                enqueueSpotlight { [spotlight] in await spotlight.replaceAll(with: entries) }
+            } else {
+                spotlightSync.clear()
+                enqueueSpotlight { [spotlight] in await spotlight.removeAll() }
+            }
+        }
+        scheduleRefresh()
+    }
+
+    private func flushSpotlight() {
+        guard !spotlightChanges.isEmpty else { return }
+        let changes = spotlightChanges
+        spotlightChanges = []
+        enqueueSpotlight { [spotlight] in await spotlight.apply(changes) }
+    }
+
+    private func enqueueSpotlight(_ work: @escaping @Sendable () async -> Void) {
+        guard spotlight.isAvailable else { return }
+        let previous = spotlightTask
+        spotlightTask = Task {
+            await previous?.value
+            await work()
+        }
+    }
+
+    /// Re-lists every finished download in Spotlight (Settings › System).
+    var spotlightCount: Int { spotlightSync.count }
+
+    func notifierChanged() {
+        notificationStatus = notifier.authorization
+    }
+
+    private func respond(to response: Notifier.Response) {
+        switch response {
+        case .show(let ids):
+            // A playlist notification names the group: show all of its downloads.
+            let members = Set(downloads.filter { $0.record.group.map { ids.contains($0.id) } ?? false }.map(\.id))
+            focus(members.isEmpty ? Set(ids) : members)
+            bringForward()
+        case .open(let id):
+            if let item = index[id], item.fileExists { open(item) } else { focus([id]); bringForward() }
+        case .reveal(let id):
+            if let item = index[id] { reveal(item) }
+        case .retry(let ids):
+            resume(Set(ids))
+        }
+    }
+
+    private func run(_ action: GlobalShortcutAction) {
+        switch action {
+        case .addDownload:
+            addFromAnywhere()
+        case .showFlux:
+            let windowShown = NSApp.windows.contains { $0.isVisible && $0.canBecomeMain }
+            if NSApp.isActive && windowShown { NSApp.hide(nil) } else { bringForward() }
+        case .pauseResumeAll:
+            if downloads.contains(where: { $0.record.status.canPause }) { pauseAll() } else { resumeAll() }
+        }
+    }
+
+    /// Flux in front with its window open.
+    func bringForward() {
+        NSApp.activate()
+        openMainWindow?()
+    }
+
+    /// The Add Download sheet over the Flux window, from the menu bar or a shortcut.
+    func addFromAnywhere() {
+        bringForward()
+        guard addSheet == nil, manager != nil else { return }
+        presentAddSheet()
+    }
+
+    /// Selects these downloads in the window (switching to History if needed).
+    func focus(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        focusRequest = FocusRequest(downloads: ids)
+    }
+
+    /// Space / ⌘Y: previews the selected finished files, or closes the preview.
+    func quickLook(_ ids: Set<UUID>) {
+        if quickLookURL != nil {
+            quickLookURL = nil
+            return
+        }
+        let urls = downloads.filter { ids.contains($0.id) }.compactMap(\.previewFile)
+        guard let first = urls.first else { return }
+        quickLookURLs = urls
+        quickLookURL = first
+    }
+
+    func canQuickLook(_ ids: Set<UUID>) -> Bool {
+        downloads.contains { ids.contains($0.id) && $0.previewFile != nil }
     }
 
     // MARK: Command line

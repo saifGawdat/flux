@@ -111,9 +111,32 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
 - Not yet: scheduled speed limits, "when the queue finishes" actions (sleep/quit),
   per-queue speed limits.
 
-## Phase 5 — macOS integration ⬜
-Menu bar extra, notifications, dock progress, Quick Look, Spotlight (Core Spotlight
-index of history), launch at login (`SMAppService`), global shortcuts.
+## Phase 5 — macOS integration ✅
+
+- Menu bar ✅: `MenuBarExtra` window with running/waiting/paused downloads (progress, speed,
+  time left), the three most recent finished or failed, Add Download, Pause/Resume All, speed
+  limit, Open Flux, Settings, Quit. Icon fills while downloading. Can be hidden.
+- Notifications ✅: finished and failed (each switchable); downloads finishing within 1.5 s
+  are one notification; a playlist/gallery is one notification when its last download
+  stops; cancellations and what was already finished at launch say nothing. Actions: Open,
+  Show in Finder, Try Again; clicking selects the downloads in Flux. Banners only while Flux
+  is in the background. Permission is asked at the first notification.
+- Dock ✅: progress bar over the icon (bytes of running downloads with a known size, redrawn per
+  whole percent, at most twice a second), the count badge, and a Dock menu (Add Download,
+  Pause/Resume All, speed limit). Clicking the Dock icon reopens a closed window.
+- Quick Look ✅: Space in the list and History, File › Quick Look (⌘Y), right-click › Quick
+  Look; pages through all selected finished files (extracted folders too).
+- Spotlight ✅: Core Spotlight items for finished downloads whose file exists (title, file,
+  site, playlist, link, date; never expire), rebuilt at launch (newest 10,000), then only
+  changes sent (finished, moved by a rule, trashed, removed). A result opens Flux with the
+  download selected (History if cleared). Switchable; off removes the items.
+- Open at login ✅: `SMAppService.mainApp`, with the "switched off in Login Items" state shown.
+- Global shortcuts ✅: Carbon hot keys (no Accessibility permission, sees only its own keys):
+  Add download from copied link (⌃⌥⌘D by default), Show/Hide Flux, Pause/Resume All.
+  Recorder in Settings › System; only combinations with two of ⌃⌥⌘ (or function keys)
+  are accepted; one action per combination; taken combinations are flagged.
+- Not yet: hiding the window when opened at login, a progress ring in the menu bar icon,
+  key names for non-US keyboard layouts in the shortcut recorder.
 
 ## Phase 6 — Analytics & automation ⬜
 Bandwidth samples table + Swift Charts dashboard, per-domain stats, post-download

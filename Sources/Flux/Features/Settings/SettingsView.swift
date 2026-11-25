@@ -90,6 +90,9 @@ struct SettingsView: View {
 
             OrganizeSettings()
                 .tabItem { Label("Organize", systemImage: "folder.badge.gearshape") }
+
+            SystemSettings()
+                .tabItem { Label("System", systemImage: "macwindow.badge.plus") }
         }
         .frame(width: 540)
         .disabled(model.manager == nil)

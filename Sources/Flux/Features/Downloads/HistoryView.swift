@@ -38,6 +38,11 @@ struct HistoryView: View {
             }
         }
         .listStyle(.inset)
+        .onKeyPress(.space) {
+            guard model.quickLookURL != nil || model.canQuickLook(selection) else { return .ignored }
+            model.quickLook(selection)
+            return .handled
+        }
         .fluxBackground()
         .overlay {
             if entries.isEmpty {

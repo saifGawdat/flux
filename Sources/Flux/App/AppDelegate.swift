@@ -3,6 +3,11 @@ import SwiftUI
 import FluxCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Early, so a notification that launched Flux reaches its delegate.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        _ = AppModel.shared.notifier
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Bundle.main.bundleIdentifier == nil {
             // Launched as a bare executable (`swift run Flux`): behave like a regular app.
@@ -21,6 +26,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Closing the window keeps Flux (and its downloads) running; reopen from the Dock.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// A Spotlight result: show that download.
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard let id = SpotlightIndexer.downloadID(from: userActivity) else { return false }
+        AppModel.shared.focus([id])
+        AppModel.shared.bringForward()
+        return true
+    }
+
+    /// Clicking the Dock icon with no window open brings the window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { AppModel.shared.openMainWindow?() }
+        return true
+    }
+
+    // MARK: Dock menu
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let model = AppModel.shared
+        guard model.manager != nil else { return nil }
+        let menu = NSMenu()
+        let running = model.activeCount
+        if running > 0 {
+            let status = NSMenuItem(title: "\(running) downloading · \(Format.speed(model.totalSpeed))", action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            menu.addItem(status)
+            menu.addItem(.separator())
+        }
+        menu.addItem(item("Add Download…", #selector(addDownload)))
+        if model.downloads.contains(where: { $0.record.status.canPause }) {
+            menu.addItem(item("Pause All", #selector(pauseAll)))
+        } else if model.downloads.contains(where: { $0.record.status == .paused }) {
+            menu.addItem(item("Resume All", #selector(resumeAll)))
+        }
+        let limit = item("Limit Speed to \(Format.limit(model.settings.speedLimit))", #selector(toggleSpeedLimit))
+        limit.state = model.settings.speedLimitEnabled ? .on : .off
+        menu.addItem(limit)
+        return menu
+    }
+
+    private func item(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @MainActor @objc private func addDownload() { AppModel.shared.addFromAnywhere() }
+    @MainActor @objc private func pauseAll() { AppModel.shared.pauseAll() }
+    @MainActor @objc private func resumeAll() { AppModel.shared.resumeAll() }
+    @MainActor @objc private func toggleSpeedLimit() { AppModel.shared.toggleGlobalSpeedLimit() }
 
     /// On normal quit, checkpoint active downloads before exiting so they resume next launch.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -51,7 +107,9 @@ enum WindowSnapshot {
             // "organize": Settings › Organize; "history": the History list; "queue": the
             // queue editor (first queue); "import": the import sheet for FLUX_SNAPSHOT_FILE;
             // "clipboard": the copied-link prompt; "queues": the list of the first queue.
-            let widths = ["history": 760.0, "queues": 760, "queue": 460, "import": 480, "clipboard": 340, "general": 540]
+            // "system": Settings › System; "menubar": the menu bar window.
+            let widths = ["history": 760.0, "queues": 760, "queue": 460, "import": 480, "clipboard": 340, "general": 540,
+                          "system": 540, "menubar": 346]
             renderOffscreen(to: path, width: widths[view] ?? 540, wait: Double(env["FLUX_SNAPSHOT_WAIT"] ?? "") ?? 3,
                             dark: env["FLUX_SNAPSHOT_DARK"] == "1") {
                 let model = AppModel.shared
@@ -76,6 +134,10 @@ enum WindowSnapshot {
                             .frame(height: 360)
                     case "general":
                         SettingsView()
+                    case "system":
+                        SystemSettings()
+                    case "menubar":
+                        MenuBarContent().background(.background)
                     default:
                         OrganizeSettings()
                     }

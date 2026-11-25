@@ -6,7 +6,8 @@ A native macOS download manager for Apple Silicon, built with Swift 6, SwiftUI a
 
 ## Status
 
-Phases 1 (foundation), 2 (download engine), 3 (smart management) and 4 (power user) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
+Phases 1 (foundation), 2 (download engine), 3 (smart management), 4 (power user) and 5 (macOS
+integration) are complete. See [docs/ROADMAP.md](docs/ROADMAP.md) for what exists
 and what is next, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions.
 
 What works today:
@@ -64,6 +65,15 @@ What works today:
 - **`flux` command line**: `flux add <link> --wait`, `flux list`, `flux pause all`,
   `flux limit 2M`, `flux queue start Night`, `flux import links.txt`, … (Settings › General ›
   Install, or `build/Flux.app/Contents/Helpers/flux`)
+- **Menu bar**: running downloads with progress, recent ones, Add Download, Pause All and the
+  speed limit, also with the window closed (Settings › System to hide it)
+- **Notifications** when downloads finish (several at once, or a whole playlist, come as one)
+  or fail, with Open / Show in Finder / Try Again; Dock icon progress bar and Dock menu
+- **Quick Look**: Space or ⌘Y previews finished files in the list and History
+- **Spotlight**: finished downloads are found by name, site or playlist; a result opens the
+  download in Flux
+- **Open at login** and **global shortcuts** (⌃⌥⌘D adds a download from the copied link from
+  any app; Show/Hide Flux and Pause/Resume All can be assigned), Settings › System
 - Downloads window with per-connection progress bars, filters, search, drag & drop of
   links, context menus, settings
 
@@ -140,7 +150,8 @@ FLUX_SNAPSHOT=/tmp/flux-dark.png FLUX_SNAPSHOT_DARK=1 build/Flux.app/Contents/Ma
 FLUX_SNAPSHOT=/tmp/add.png FLUX_SNAPSHOT_ADD="https://…" build/Flux.app/Contents/MacOS/Flux
 # the Info window of the n-th download (FLUX_SNAPSHOT_EDITLINK=1 opens Change Link):
 FLUX_SNAPSHOT=/tmp/info.png FLUX_SNAPSHOT_INFO=0 build/Flux.app/Contents/MacOS/Flux
-# Settings › Organize (organize), General (general), History (history), the first queue's
+# Settings › Organize (organize), General (general), System (system), the menu bar window
+# (menubar), History (history), the first queue's
 # editor (queue) or list (queues), the clipboard prompt (clipboard), or the import sheet for
 # FLUX_SNAPSHOT_FILE (import):
 FLUX_SNAPSHOT=/tmp/org.png FLUX_SNAPSHOT_VIEW=organize build/Flux.app/Contents/MacOS/Flux
@@ -151,5 +162,7 @@ FLUX_SNAPSHOT=/tmp/org.png FLUX_SNAPSHOT_VIEW=organize build/Flux.app/Contents/M
 - Database: `~/Library/Application Support/Flux/flux.sqlite`
 - Command socket: `~/Library/Application Support/Flux/control.sock` (owner-only; override
   with `FLUX_SOCKET`, which a `FLUX_DATABASE` developer instance needs to accept commands)
+- Spotlight: finished downloads are listed under the domain `app.flux.downloads` (turn off in
+  Settings › System to remove them)
 - Logs: `log stream --predicate 'subsystem == "app.flux"'`
 - Partial downloads: `<name>.<id>.fluxpart` next to the destination file

@@ -178,3 +178,20 @@ Filing, duplicate checks and extraction run in `DownloadManager.finishUp` once a
 - The connection threads are plain GCD threads that block on the socket and wait for the
   async handler with a semaphore; Swift's cooperative pool is never blocked.
 
+### D14 — System integration reads the event stream; decisions live in FluxCore
+- Menu bar, notifications, Dock, Spotlight and shortcuts are views of the same
+  `DownloadManager` events the window uses. None of them hold download state.
+- What deserves a notification (`MilestoneTracker`), the Dock fraction (`OverallProgress`) and
+  what Spotlight must change (`SpotlightSync`) are pure FluxCore types with tests; the app
+  only hands them events and applies their answers to the system APIs.
+- Notifications and Spotlight are transitions, not states: a baseline at launch means
+  nothing already finished is announced, and Spotlight is rebuilt once per launch so files
+  deleted while Flux was closed drop out. Spotlight work is chained so a rebuild can't land
+  after a later update.
+- Global shortcuts use `RegisterEventHotKey` rather than an event tap: no Accessibility
+  permission, and Flux never sees keystrokes other than its own combinations. Combinations
+  must use two of ⌃⌥⌘ (or a function key) so Flux can't take ⌘S-style shortcuts from
+  every app.
+- System APIs that need a bundle (notifications, Spotlight, login item) are skipped when
+  Flux runs as a bare executable (`swift run Flux`).
+

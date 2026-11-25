@@ -1,4 +1,5 @@
 import FluxCore
+import QuickLook
 import SwiftUI
 
 enum StatusFilter: String, CaseIterable, Identifiable, Hashable {
@@ -44,6 +45,8 @@ struct DownloadsView: View {
     @State private var sidebar: SidebarItem? = .status(.all)
     @State private var selection = Set<UUID>()
     @State private var search = ""
+    /// Selection to apply once the sidebar switch (which clears selection) has happened.
+    @State private var pendingSelection: Set<UUID>?
 
     private var visible: [DownloadItemModel] {
         model.current.filter { item in
@@ -130,7 +133,11 @@ struct DownloadsView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
         }
-        .onChange(of: sidebar) { selection = [] }
+        .onChange(of: sidebar) {
+            selection = pendingSelection ?? []
+            pendingSelection = nil
+        }
+        .modifier(FocusAndPreview(selection: selection, show: show))
         .onChange(of: model.settings.queues.map(\.id)) { _, ids in
             // The shown queue was deleted.
             if case .queue(let id?) = sidebar, !ids.contains(id) { sidebar = .status(.all) }
@@ -195,6 +202,20 @@ struct DownloadsView: View {
         }
     }
 
+    /// Selects downloads, switching to History or back to the list as needed.
+    private func show(_ ids: Set<UUID>) {
+        let items = model.downloads.filter { ids.contains($0.id) }
+        guard !items.isEmpty else { return }
+        search = ""
+        let target: SidebarItem = items.allSatisfy(\.record.isArchived) ? .history : .status(.all)
+        if sidebar == target {
+            selection = Set(items.filter { $0.record.isArchived == (target == .history) }.map(\.id))
+        } else {
+            pendingSelection = Set(items.filter { $0.record.isArchived == (target == .history) }.map(\.id))
+            sidebar = target
+        }
+    }
+
     private var statusFilter: StatusFilter {
         if case .status(let filter) = sidebar { return filter }
         return .all
@@ -214,6 +235,25 @@ struct DownloadsView: View {
         let active = model.activeCount
         guard active > 0 else { return "\(model.current.count) downloads" }
         return "\(active) active · \(Format.speed(model.totalSpeed))"
+    }
+}
+
+/// Spotlight / notification / menu bar requests to show downloads, and Quick Look.
+private struct FocusAndPreview: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let selection: Set<UUID>
+    let show: (Set<UUID>) -> Void
+
+    func body(content: Content) -> some View {
+        @Bindable var model = model
+        content
+            .onChange(of: model.focusRequest, initial: true) { _, request in
+                guard let request else { return }
+                model.focusRequest = nil
+                show(request.downloads)
+            }
+            .focusedSceneValue(\.downloadSelection, selection)
+            .quickLookPreview($model.quickLookURL, in: model.quickLookURLs)
     }
 }
 
@@ -300,6 +340,11 @@ struct DownloadList: View {
             }
         }
         .onDeleteCommand { model.remove(selection, trashFiles: false) }
+        .onKeyPress(.space) {
+            guard model.quickLookURL != nil || model.canQuickLook(selection) else { return .ignored }
+            model.quickLook(selection)
+            return .handled
+        }
         .dropDestination(for: URL.self) { urls, _ in
             let links = urls.filter(LinkExtractor.isDownloadable)
             guard !links.isEmpty else { return false }
@@ -351,6 +396,9 @@ struct DownloadContextMenu: View {
                 Button("Open") { model.open(single) }.disabled(!single.fileExists)
             }
             Button("Show in Finder") { model.reveal(single) }
+            if single.previewFile != nil {
+                Button("Quick Look") { model.quickLook([single.id]) }
+            }
             Button("Get Info") { model.showInfo(single.id) }
             if single.record.status != .completed {
                 Button("Update Link…") { model.showInfo(single.id, editLink: true) }
