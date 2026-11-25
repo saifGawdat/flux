@@ -41,7 +41,7 @@ struct ImportSheet: View {
                             Text("\(known) of these \(known == 1 ? "is" : "are") already in your list; importing adds \(known == 1 ? "it" : "them") again.")
                         }
                         if request.entries.contains(where: { $0.directory != nil }) {
-                            Text("Folders named in the file are used; the rest go to your download folder.")
+                            Text("Folders named in the file are used when they’re in your home folder or on an external drive; the rest go to your download folder. Folders like Library or hidden ones are never used.")
                         }
                     }
                     .font(.caption)

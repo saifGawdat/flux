@@ -161,8 +161,19 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
 - Not yet: user-ordered action steps, per-site speed history charts, CSV export of statistics,
   verifying against a checksum file as an action.
 
-## Phase 7 — Production ⬜
-Security audit, Developer ID signing, notarization, DMG, Sparkle updates.
+## Phase 7 — Production 🟡
+
+- Security audit ✅: [SECURITY.md](SECURITY.md). Fixed: import folders restricted (link lists
+  could target `~/Library/LaunchAgents`), hardened runtime, control connection cap,
+  owner-only database, private path logging.
+- Signing ✅ (pipeline): hardened runtime always; Developer ID + secure timestamp via
+  `FLUX_SIGN_IDENTITY`. Not yet done for real: no Developer ID certificate on this Mac.
+- Notarization ✅ (pipeline): `scripts/release.sh` submits the app and the DMG with
+  `notarytool` (`FLUX_NOTARY_PROFILE`), staples both, checks with `spctl`. Needs the
+  Developer ID to run.
+- DMG ✅: `build/Flux-<version>.dmg` (Flux.app + Applications link, UDZO), signed when an
+  identity is given, SHA-256 printed.
+- Sparkle updates ⬜: needs a place to host the appcast and DMGs, and an EdDSA key pair.
 
 ## Out of scope (future, architecture keeps room)
 AI assistant and browser extensions. Both would talk to `DownloadManager` through

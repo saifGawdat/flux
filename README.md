@@ -115,6 +115,15 @@ open build/Flux.app
 
 For development, `swift run Flux` also launches the app (without a bundle identifier).
 
+## Release
+
+```sh
+# Local test DMG (ad-hoc signed, hardened runtime):
+FLUX_VERSION=1.0.0 scripts/release.sh
+# Distribution (Developer ID + notarization; see docs/SECURITY.md › Release checklist):
+FLUX_VERSION=1.0.0 FLUX_SIGN_IDENTITY="Developer ID Application: …" FLUX_NOTARY_PROFILE=flux-notary scripts/release.sh
+```
+
 ## Command line
 
 `flux` sends each command to the running app (it opens Flux if needed), so Terminal and the

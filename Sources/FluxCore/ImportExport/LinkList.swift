@@ -300,12 +300,37 @@ public enum LinkList {
         return clean.isEmpty ? nil : clean
     }
 
-    /// Absolute folders only (with ~ expanded); anything else is ignored.
-    static func folder(_ path: String?) -> URL? {
+    /// Absolute folders only (with ~ expanded), and only places meant for files: anything
+    /// else is ignored and the download goes to the default folder. See `isSafeFolder`.
+    static func folder(_ path: String?, home: String = NSHomeDirectory()) -> URL? {
         guard let path = path?.trimmingCharacters(in: .whitespaces), !path.isEmpty else { return nil }
         let expanded = (path as NSString).expandingTildeInPath
         guard expanded.hasPrefix("/") else { return nil }
-        return URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
+        let url = URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
+        return isSafeFolder(url, home: home) ? url : nil
+    }
+
+    /// A list of links comes from anywhere, so the folders it names must not let a file
+    /// land where macOS or an app would act on it (`~/Library/LaunchAgents`, `~/.ssh`,
+    /// `/Applications`, …). Allowed: folders in the home folder outside `~/Library`, and
+    /// external volumes; never a hidden folder or one that resolves elsewhere via a link.
+    public static func isSafeFolder(_ url: URL, home: String = NSHomeDirectory()) -> Bool {
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let homePath = URL(fileURLWithPath: home).standardizedFileURL.resolvingSymlinksInPath().path
+        let relative: [Substring]
+        if resolved.hasPrefix(homePath + "/") {
+            relative = resolved.dropFirst(homePath.count + 1).split(separator: "/")
+            if relative.first == "Library" { return false }
+        } else if resolved.hasPrefix("/Volumes/") {
+            relative = resolved.dropFirst("/Volumes/".count).split(separator: "/")
+            // The startup disk is mounted under /Volumes too: its name alone isn't enough.
+            guard relative.count >= 2 else { return false }
+            let volumeRoot = "/Volumes/" + relative[0]
+            if (try? FileManager.default.destinationOfSymbolicLink(atPath: volumeRoot)) == "/" { return false }
+        } else {
+            return false
+        }
+        return !relative.isEmpty && !relative.contains { $0.hasPrefix(".") }
     }
 
     // MARK: Writing

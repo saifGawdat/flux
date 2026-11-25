@@ -1,6 +1,8 @@
 #!/bin/zsh
-# Builds an Apple Silicon release of Flux and wraps it in build/Flux.app (ad-hoc signed).
-# Developer ID signing, notarization and DMG packaging come in Phase 7.
+# Builds an Apple Silicon release of Flux and wraps it in build/Flux.app, signed with the
+# hardened runtime. FLUX_SIGN_IDENTITY="Developer ID Application: …" signs for distribution
+# (with a secure timestamp); without it the app is signed ad hoc for local use.
+# scripts/release.sh adds notarization and the DMG.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -46,6 +48,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - --timestamp=none "$APP/Contents/Helpers/flux"
-codesign --force --sign - --timestamp=none "$APP"
+IDENTITY="${FLUX_SIGN_IDENTITY:--}"
+if [[ "$IDENTITY" == "-" ]]; then TIMESTAMP="--timestamp=none"; else TIMESTAMP="--timestamp"; fi
+# Inside out: the helper first, then the app. No entitlements: Flux needs no exceptions to
+# the hardened runtime (it loads no third-party code and only launches other programs).
+codesign --force --options runtime --sign "$IDENTITY" $TIMESTAMP "$APP/Contents/Helpers/flux"
+codesign --force --options runtime --sign "$IDENTITY" $TIMESTAMP "$APP"
+codesign --verify --strict --deep "$APP"
 echo "Built $APP ($(lipo -archs "$APP/Contents/MacOS/Flux"))"

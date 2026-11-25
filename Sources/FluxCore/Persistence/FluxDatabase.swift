@@ -8,7 +8,19 @@ public actor FluxDatabase {
 
     /// Opens (creating if needed) and migrates the database at `url`.
     public init(url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let folder = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        // Download history is private: owner-only, even where the home folder isn't.
+        // SQLite gives the -wal and -shm files the database file's permissions.
+        if folder.standardizedFileURL == Self.defaultURL.deletingLastPathComponent().standardizedFileURL {
+            chmod(folder.path, 0o700)
+        }
+        let existed = FileManager.default.fileExists(atPath: url.path)
+        if !existed { FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
+        for suffix in ["", "-wal", "-shm"] where FileManager.default.fileExists(atPath: url.path + suffix) {
+            chmod(url.path + suffix, 0o600)
+        }
         connection = try SQLiteConnection(path: url.path)
         try Schema.migrate(connection)
     }

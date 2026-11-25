@@ -81,14 +81,24 @@ public final class ControlServer: @unchecked Sendable {
         unlink(path)
     }
 
+    /// Connections served at once; more are closed straight away, so a misbehaving client
+    /// can't tie up threads.
+    static let maxConnections = 16
+
     private static func acceptLoop(_ listener: Int32, idleTimeout: TimeInterval, handler: @escaping Handler) {
+        let slots = DispatchSemaphore(value: maxConnections)
         while true {
             let client = accept(listener, nil, nil)
             if client < 0 {
                 if errno == EINTR || errno == ECONNABORTED { continue }
                 return // closed by stop()
             }
+            guard slots.wait(timeout: .now()) == .success else {
+                close(client)
+                continue
+            }
             DispatchQueue.global(qos: .userInitiated).async {
+                defer { slots.signal() }
                 Self.serve(client, idleTimeout: idleTimeout, handler: handler)
             }
         }

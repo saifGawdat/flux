@@ -16,7 +16,7 @@ enum DownloadMetadata {
         do {
             try target.setResourceValues(values)
         } catch {
-            Log.engine.error("Couldn't set quarantine on \(file.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            Log.engine.error("Couldn't set quarantine on \(file.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
         }
 
         guard let plist = try? PropertyListSerialization.data(

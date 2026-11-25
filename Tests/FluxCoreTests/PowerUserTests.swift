@@ -231,7 +231,7 @@ struct LinkListTests {
         see https://example.com/b.pdf and https://example.com/c.iso
         https://example.com/d.dmg
           out=Disk Image.dmg
-          dir=/tmp/flux-imports
+          dir=~/Downloads/flux-imports
           checksum=sha-256=\(String(repeating: "ab", count: 32))
         https://one.example/e.tar\thttps://two.example/e.tar
         https://example.com/a.zip
@@ -243,7 +243,7 @@ struct LinkListTests {
             "https://example.com/d.dmg", "https://one.example/e.tar",
         ])
         #expect(entries[3].fileName == "Disk Image.dmg")
-        #expect(entries[3].directory?.path == "/tmp/flux-imports")
+        #expect(entries[3].directory?.path == NSHomeDirectory() + "/Downloads/flux-imports")
         #expect(entries[3].checksum?.algorithm == .sha256)
         #expect(entries[4].mirrors == [URL(string: "https://two.example/e.tar")!])
     }
@@ -271,7 +271,7 @@ struct LinkListTests {
     }
 
     @Test func jsonRoundTripKeepsDetails() throws {
-        var record = DownloadRecord(url: URL(string: "https://example.com/tool.dmg")!, directory: URL(fileURLWithPath: "/tmp/apps"))
+        var record = DownloadRecord(url: URL(string: "https://example.com/tool.dmg")!, directory: URL(fileURLWithPath: NSHomeDirectory() + "/Downloads/apps"))
         record.fileName = "Tool.dmg"
         record.mirrors = [URL(string: "https://mirror.example/tool.dmg")!]
         record.checksum = Checksum.parse(String(repeating: "ef", count: 32))
@@ -283,7 +283,7 @@ struct LinkListTests {
         #expect(entries.count == 1)
         #expect(entries[0].url == record.url)
         #expect(entries[0].fileName == "Tool.dmg")
-        #expect(entries[0].directory?.path == "/tmp/apps")
+        #expect(entries[0].directory?.path == NSHomeDirectory() + "/Downloads/apps")
         #expect(entries[0].mirrors == record.mirrors)
         #expect(entries[0].checksum == record.checksum)
         #expect(entries[0].referer == record.referer)
@@ -352,6 +352,22 @@ struct ControlTests {
 
         // A second app instance can't take over the live socket.
         #expect(throws: ControlError.alreadyRunning) { try ControlServer(socketURL: url).start { _ in ControlResponse() } }
+    }
+
+    @Test func idleConnectionsCantCrowdOutCommands() async throws {
+        let url = socketURL()
+        let server = ControlServer(socketURL: url, idleTimeout: 30)
+        try server.start { _ in ControlResponse(message: "pong") }
+        defer { server.stop() }
+        // Connections that never send anything hold every slot…
+        let idle = try (0..<ControlServer.maxConnections).map { _ in try ControlClient.connect(url.path) }
+        try await Task.sleep(for: .milliseconds(200))
+        // …so the next one is closed straight away instead of waiting.
+        #expect(throws: (any Error).self) { try ControlClient.send(ControlRequest(.ping), socketURL: url) }
+        for fd in idle { close(fd) }
+        try await eventually("a slot to free up", timeout: 5) {
+            (try? ControlClient.send(ControlRequest(.ping), socketURL: url))?.message == "pong"
+        }
     }
 
     @Test func staleSocketsAreReplacedButOtherFilesAreNot() throws {
@@ -490,5 +506,32 @@ extension PersistenceTests {
         }
         let loaded = try await FluxDatabase(url: url).loadDownloads()
         #expect(loaded.first?.queueID == queue)
+    }
+}
+
+struct ImportFolderSafetyTests {
+    let home = NSHomeDirectory()
+
+    @Test(arguments: [
+        "~/Library/LaunchAgents", "~/Library/Application Support/Flux", "~/.ssh", "~/Downloads/.hidden",
+        "~/Downloads/../Library/LaunchAgents", "/Applications", "/usr/local/bin", "/tmp", "/etc", "/", "~",
+        "/Volumes/Data",
+    ])
+    func placesWhereAFileCouldDoHarmAreIgnored(_ path: String) {
+        #expect(LinkList.folder(path) == nil)
+    }
+
+    @Test(arguments: ["~/Downloads", "~/Downloads/ISOs", "~/Documents/Statements", "~/Movies", "/Volumes/Data/Inbox"])
+    func ordinaryFoldersAreKept(_ path: String) {
+        #expect(LinkList.folder(path)?.path == (path as NSString).expandingTildeInPath)
+    }
+
+    @Test func aLinkPointingIntoLibraryIsRefused() throws {
+        let base = URL(fileURLWithPath: home).appendingPathComponent("Downloads")
+        let link = base.appendingPathComponent("flux-test-link-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: home + "/Library")
+        defer { try? FileManager.default.removeItem(at: link) }
+        #expect(LinkList.folder(link.path + "/LaunchAgents") == nil)
     }
 }

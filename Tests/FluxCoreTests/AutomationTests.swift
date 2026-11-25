@@ -255,3 +255,15 @@ struct AutomationManagerTests {
         await manager.shutdown()
     }
 }
+
+struct DatabasePrivacyTests {
+    @Test func databaseFilesAreOwnerOnly() async throws {
+        let url = try tempDir().appendingPathComponent("flux.sqlite")
+        let db = try FluxDatabase(url: url)
+        try await db.save(FluxSettings())
+        for suffix in ["", "-wal", "-shm"] where FileManager.default.fileExists(atPath: url.path + suffix) {
+            let mode = try FileManager.default.attributesOfItem(atPath: url.path + suffix)[.posixPermissions] as? NSNumber
+            #expect(mode?.intValue == 0o600, "\(suffix)")
+        }
+    }
+}
