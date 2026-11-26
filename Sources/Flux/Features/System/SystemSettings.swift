@@ -20,6 +20,7 @@ struct SystemSettings: View {
                 toggle("When a download fails", \.notifyOnFailure)
                 NotificationStatusRow()
             }
+            UpdatesSection()
             Section("Spotlight") {
                 toggle("Find finished downloads with Spotlight", \.indexInSpotlight,
                        note: "Search by name, site or playlist; choosing a result shows the download in Flux. The list stays on this Mac.")
@@ -48,6 +49,41 @@ struct SystemSettings: View {
         )) {
             Text(title)
             if let note { Text(note) }
+        }
+    }
+}
+
+private struct UpdatesSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var updater = model.updater
+        Section {
+            if updater.isAvailable {
+                Toggle("Check for updates automatically", isOn: $updater.automaticallyChecks)
+                Toggle("Download and install updates automatically", isOn: $updater.automaticallyDownloads)
+                    .disabled(!updater.automaticallyChecks)
+                HStack {
+                    Text(updater.lastChecked.map { "Last checked \($0.formatted(.relative(presentation: .named)))" } ?? "Not checked yet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .disabled(!updater.canCheckForUpdates)
+                }
+            } else {
+                Text("This build of Flux can’t update itself (it has no update feed). Builds made with scripts/release.sh can.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Updates")
+        } footer: {
+            if updater.isAvailable {
+                Text("Updates come from Flux’s GitHub releases and are installed only if they carry Flux’s signature.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }

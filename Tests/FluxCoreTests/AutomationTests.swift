@@ -100,6 +100,18 @@ struct CommandTests {
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
+    @Test func backgroundProgramsDontHoldUpTheCommand() async throws {
+        let file = try tempDir().appendingPathComponent("f.txt")
+        try Data().write(to: file)
+        // The background sleep keeps the output pipe open after the command finishes.
+        var command = AutomationCommand(name: "Spawn", script: "sleep 20 & echo started")
+        command.approve()
+        let started = Date()
+        let output = try await CommandRunner.run(command, file: file, record: finished("f.txt"))
+        #expect(output == "started")
+        #expect(Date().timeIntervalSince(started) < 5)
+    }
+
     @Test func slowCommandsAreStopped() async throws {
         let file = try tempDir().appendingPathComponent("f.txt")
         try Data().write(to: file)

@@ -15,6 +15,10 @@ struct FluxApp: App {
         }
         .defaultSize(width: 1000, height: 640)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { model.updater.checkForUpdates() }
+                    .disabled(!model.updater.canCheckForUpdates)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Add Download…") { model.presentAddSheet() }
                     .keyboardShortcut("n")

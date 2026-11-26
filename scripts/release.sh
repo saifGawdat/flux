@@ -61,3 +61,28 @@ else
   echo "Ad-hoc test build: $DMG (Gatekeeper will block it on other Macs)"
 fi
 shasum -a 256 "$DMG"
+
+# The update feed: one item for this release, signed with the EdDSA key in the login
+# Keychain (made once with .build/artifacts/sparkle/Sparkle/bin/generate_keys --account flux).
+REPO="${FLUX_REPO:-saifGawdat/Flux}"
+BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+SIGNATURE="$(.build/artifacts/sparkle/Sparkle/bin/sign_update --account flux "$DMG")"
+cat > build/appcast.xml <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Flux</title>
+    <item>
+      <title>Flux ${VERSION}</title>
+      <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+      <sparkle:version>${BUILD}</sparkle:version>
+      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/${REPO}/releases/tag/v${VERSION}</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/${REPO}/releases/download/v${VERSION}/Flux-${VERSION}.dmg"
+                 type="application/octet-stream" ${SIGNATURE} />
+    </item>
+  </channel>
+</rss>
+XML
+echo "Update feed: build/appcast.xml (publish with scripts/publish.sh)"

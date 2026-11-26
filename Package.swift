@@ -11,6 +11,10 @@ let package = Package(
         // case-insensitive disks.
         .executable(name: "flux-cli", targets: ["FluxCLI"]),
     ],
+    dependencies: [
+        // In-app updates (Phase 7). Pinned: updates change what users run.
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.6.4"),
+    ],
     targets: [
         .target(
             name: "FluxCore",
@@ -18,7 +22,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "Flux",
-            dependencies: ["FluxCore"]
+            dependencies: ["FluxCore", .product(name: "Sparkle", package: "Sparkle")],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .executableTarget(
             name: "FluxCLI",

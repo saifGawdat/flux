@@ -215,3 +215,13 @@ Filing, duplicate checks and extraction run in `DownloadManager.finishUp` once a
   which could run code anyway. No CLI or import path can create commands.
 - notify / reveal / open are UI acts, so the manager emits `.automation` events and the app
   performs them.
+
+### D16 — Releases: hardened runtime, notarized DMG, Sparkle from GitHub Releases
+- One script path for every build: `build-app.sh` always signs with the hardened runtime. With a
+  Developer ID it signs for distribution; without one it signs ad hoc, adding only
+  `disable-library-validation` so the bundled Sparkle loads.
+- The update feed is GitHub's "latest release" asset URL, so there is no server or Pages site
+  to run. Publishing a release is the only step that offers an update, and `publish.sh`
+  asks before doing it.
+- Trust comes from the EdDSA signature, not the host: the public key ships in Info.plist, and
+  the private key never leaves the maintainer's Keychain (and their backup).

@@ -161,7 +161,7 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
 - Not yet: user-ordered action steps, per-site speed history charts, CSV export of statistics,
   verifying against a checksum file as an action.
 
-## Phase 7 — Production 🟡
+## Phase 7 — Production ✅ (waiting on a Developer ID and a public GitHub repository)
 
 - Security audit ✅: [SECURITY.md](SECURITY.md). Fixed: import folders restricted (link lists
   could target `~/Library/LaunchAgents`), hardened runtime, control connection cap,
@@ -173,7 +173,14 @@ Status legend: ✅ done and tested · 🟡 foundation only (see notes) · ⬜ no
   Developer ID to run.
 - DMG ✅: `build/Flux-<version>.dmg` (Flux.app + Applications link, UDZO), signed when an
   identity is given, SHA-256 printed.
-- Sparkle updates ⬜: needs a place to host the appcast and DMGs, and an EdDSA key pair.
+- Sparkle updates ✅: Sparkle 2.6.4 (pinned, checksum-verified by SwiftPM), "Check for
+  Updates…" in the app menu, Settings › System › Updates (automatic checks / installs;
+  Sparkle asks on the second launch before checking). Feed: GitHub's
+  `releases/latest/download/appcast.xml`. `release.sh` signs each DMG with the EdDSA key kept
+  in the login Keychain (account `flux`) and writes `build/appcast.xml`; `scripts/publish.sh`
+  uploads both as a GitHub release after a confirmation. Build numbers = commit count.
+- Not yet: the first public release (needs the repository on GitHub, public, and a
+  Developer ID so other Macs open it), delta updates.
 
 ## Out of scope (future, architecture keeps room)
 AI assistant and browser extensions. Both would talk to `DownloadManager` through

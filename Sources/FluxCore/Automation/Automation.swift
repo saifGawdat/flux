@@ -178,6 +178,14 @@ public enum CommandRunner {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
+        // Exit is reported by Foundation itself; no thread waits on the process.
+        let exited = AsyncStream<Void> { continuation in
+            process.terminationHandler = { _ in
+                continuation.yield()
+                continuation.finish()
+            }
+        }
+        let reader = OutputCollector(output.fileHandleForReading, limit: outputLimit)
         try process.run()
 
         let pid = process.processIdentifier
@@ -186,18 +194,11 @@ public enum CommandRunner {
             kill(pid, SIGTERM)
             return true
         }
-        let data = await Task.detached { () -> Data in
-            var collected = Data()
-            while true {
-                let chunk = output.fileHandleForReading.availableData
-                if chunk.isEmpty { break }
-                collected.append(chunk)
-                if collected.count > outputLimit { collected.removeFirst(collected.count - outputLimit) }
-            }
-            return collected
-        }.value
-        process.waitUntilExit()
+        // Wait for the command itself, not for end-of-output: a background program it
+        // started (`open …`, `cmd &`) keeps the pipe open long after the command is done.
+        for await _ in exited { break }
         timer.cancel()
+        let data = reader.finish()
         let timedOut = await timer.value
         let text = String(decoding: data, as: UTF8.self)
         let lastLine = text.split(whereSeparator: \.isNewline).last.map(String.init)?
@@ -207,6 +208,42 @@ public enum CommandRunner {
             throw Failure.failed(command.name, status: process.terminationStatus, output: String(lastLine.prefix(200)))
         }
         return String(lastLine.prefix(200))
+    }
+
+    /// Collects a pipe's output while a process runs, keeping only the last `limit` bytes.
+    final class OutputCollector: @unchecked Sendable {
+        private let handle: FileHandle
+        private let limit: Int
+        private let lock = NSLock()
+        private var data = Data()
+
+        init(_ handle: FileHandle, limit: Int) {
+            self.handle = handle
+            self.limit = limit
+            handle.readabilityHandler = { [weak self] handle in self?.append(handle.availableData) }
+        }
+
+        private func append(_ chunk: Data) {
+            lock.withLock {
+                data.append(chunk)
+                if data.count > limit { data.removeFirst(data.count - limit) }
+            }
+        }
+
+        /// Stops reading and returns what arrived, plus whatever is still buffered in
+        /// the pipe, without waiting for other holders of the pipe to close it.
+        func finish() -> Data {
+            handle.readabilityHandler = nil
+            let fd = handle.fileDescriptor
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+            var buffer = [UInt8](repeating: 0, count: 16_384)
+            while true {
+                let count = read(fd, &buffer, buffer.count)
+                guard count > 0 else { break }
+                append(Data(buffer[0..<count]))
+            }
+            return lock.withLock { data }
+        }
     }
 
     static func environment(file: URL, record: DownloadRecord) -> [String: String] {

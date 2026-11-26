@@ -107,6 +107,7 @@ final class AppModel {
     /// Global shortcuts the system refused because another app holds them.
     private(set) var unavailableShortcuts: Set<GlobalShortcutAction> = []
     let loginItem = LoginItem()
+    let updater = Updater()
 
     @ObservationIgnored let notifier = Notifier()
     @ObservationIgnored private var milestones = MilestoneTracker()

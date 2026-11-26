@@ -124,6 +124,13 @@ FLUX_VERSION=1.0.0 scripts/release.sh
 FLUX_VERSION=1.0.0 FLUX_SIGN_IDENTITY="Developer ID Application: …" FLUX_NOTARY_PROFILE=flux-notary scripts/release.sh
 ```
 
+Updates: installed copies check `https://github.com/saifGawdat/Flux/releases/latest/download/appcast.xml`
+(override with `FLUX_REPO` / `FLUX_FEED_URL` when building). After `release.sh`, run
+`FLUX_VERSION=1.0.0 scripts/publish.sh` to publish the DMG and feed as a GitHub release. The
+update signing key lives in the login Keychain (`generate_keys --account flux`); **back it up**
+with `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account flux -x flux-update-key.txt`
+and keep that file somewhere safe and private. Without it, existing installs can't be updated.
+
 ## Command line
 
 `flux` sends each command to the running app (it opens Flux if needed), so Terminal and the

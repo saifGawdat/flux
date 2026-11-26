@@ -17,6 +17,7 @@ scripts). Threat model:
 | 3 | Low | The control socket served unlimited parallel connections. A same-user client could tie up threads. | At most 16 at once; extra connections are closed at once. Covered by a test. |
 | 4 | Low | The database (download history, links, settings) was created with default permissions (folder 0755, files 0644). `~/Library` being 0700 protected it in practice. | Folder 0700, database files 0600, including `-wal`/`-shm`. Covered by a test. |
 | 5 | Low | A file path was logged at public level when setting quarantine failed. | Logged as private. |
+| 6 | Medium | A rule command that left a background program running (`open …`, `cmd &`) held Flux's output pipe, so Flux waited for that program, possibly forever. | Flux waits for the command's own exit, then reads what's buffered. Covered by a test. |
 
 ## Reviewed, no change needed
 
@@ -59,7 +60,12 @@ scripts). Threat model:
 2. **Media tools are the user's own installs** (Homebrew) and read the user's yt-dlp and gallery-dl config files. Flux trusts them like any program the user installed. Recommendation: a managed install with pinned checksums (see ROADMAP "Not yet").
 3. **Developer environment variables** (`FLUX_DATABASE`, `FLUX_SOCKET`, `FLUX_SNAPSHOT*`) work in release builds. Only whoever launches Flux can set them, so they give nothing beyond that user's own rights. They could be compiled out with `#if DEBUG` if wanted.
 4. **Same-user malware** can edit settings, including approving a command by writing its digest. That user can already run code; the digest exists to protect against edits made outside the approval flow, not against that.
-5. **Updates**: until Sparkle is set up, there is no in-app update channel and no automatic security fixes.
+5. **Updates** (Sparkle):
+   - Every update must carry an EdDSA signature from the key in the maintainer's Keychain. The public key is in Info.plist (`SUPublicEDKey`), and Sparkle refuses anything else, even from the right URL.
+   - The feed and downloads use HTTPS (GitHub).
+   - The private key must be backed up offline. If it leaks, anyone who controls the feed can ship code to every install, so treat it like the Developer ID key.
+   - Sparkle's XPC services are removed: Flux isn't sandboxed and doesn't use them.
+   - Ad-hoc test builds carry `disable-library-validation` so they can load Sparkle without a Team ID. Developer ID builds don't carry it.
 
 ## Release checklist
 
@@ -68,3 +74,5 @@ scripts). Threat model:
 - [ ] Check `codesign -dv build/Flux.app` shows `flags=0x10000(runtime)` and a Developer ID authority.
 - [ ] Open the DMG on a second Mac or user account: it opens without a Gatekeeper warning.
 - [ ] Publish the SHA-256 that `release.sh` prints alongside the DMG.
+- [ ] Use a higher build number than the last release (the default, the commit count, always is).
+- [ ] Run `FLUX_VERSION=x.y.z scripts/publish.sh`; then on an older install, Check for Updates… offers it.
